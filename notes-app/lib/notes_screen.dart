@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'editor_screen.dart';
 import 'note.dart';
-import 'note_store.dart';
+import 'store/note_store.dart';
 
 class NotesScreen extends StatefulWidget {
   const NotesScreen({super.key, required this.store});
@@ -97,7 +97,7 @@ class _NotesScreenState extends State<NotesScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _open(store.newNote()),
+        onPressed: () => _open(Note.create()),
         icon: const Icon(Icons.edit_outlined),
         label: const Text('New note'),
       ),

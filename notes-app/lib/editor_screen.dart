@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'note.dart';
-import 'note_store.dart';
+import 'store/note_store.dart';
 
 /// Edits a working copy of a note and saves it when the screen is left.
 /// Pops with the deleted note (for undo) if the user deletes it.

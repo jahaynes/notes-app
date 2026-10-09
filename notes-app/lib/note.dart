@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 
 /// Palette of note background colors. Index 0 means "no color".
 const noteColors = <Color?>[
@@ -21,6 +22,11 @@ class Note {
     this.showFull = false,
     DateTime? updatedAt,
   }) : updatedAt = updatedAt ?? DateTime.now();
+
+  /// A blank note with a fresh unique id.
+  factory Note.create() => Note(id: _uuid.v4());
+
+  static const _uuid = Uuid();
 
   final String id;
   String title;

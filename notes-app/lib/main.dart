@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'note_store.dart';
+import 'store/local_note_store.dart';
+import 'store/note_store.dart';
 import 'notes_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  runApp(NoteishApp(store: NoteStore(prefs)));
+  runApp(NoteishApp(store: LocalNoteStore(prefs)));
 }
 
 class NoteishApp extends StatelessWidget {

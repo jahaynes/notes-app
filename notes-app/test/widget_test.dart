@@ -1,28 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:noteish/store/local_note_store.dart';
 import 'package:noteish/main.dart';
-import 'package:noteish/note_store.dart';
+import 'package:noteish/note.dart';
+import 'package:noteish/store/note_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Future<NoteStore> _freshStore() async {
   SharedPreferences.setMockInitialValues({});
-  return NoteStore(await SharedPreferences.getInstance());
+  return LocalNoteStore(await SharedPreferences.getInstance());
 }
 
 void main() {
   test('store persists, and drops empty notes', () async {
     final store = await _freshStore();
-    final a = store.newNote()..title = 'A';
-    final b = store.newNote()..title = 'B';
+    final a = Note.create()..title = 'A';
+    final b = Note.create()..title = 'B';
     store.upsert(a);
     store.upsert(b);
-    store.upsert(store.newNote()); // empty, ignored
+    store.upsert(Note.create()); // empty, ignored
 
     expect(store.notes.map((n) => n.title), ['B', 'A']);
     expect(store.search('a').single.title, 'A');
 
     // Reload from the same prefs.
-    final reloaded = NoteStore(await SharedPreferences.getInstance());
+    final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
     expect(reloaded.notes.length, 2);
   });
 
@@ -57,7 +59,7 @@ void main() {
   ) async {
     final store = await _freshStore();
     final body = List.generate(20, (i) => 'line $i').join('\n');
-    store.upsert(store.newNote()..body = body);
+    store.upsert(Note.create()..body = body);
     await tester.pumpWidget(NoteishApp(store: store));
 
     expect(tester.widget<Text>(find.text(body)).maxLines, 8);
@@ -72,7 +74,7 @@ void main() {
     expect(store.notes.single.showFull, isTrue);
     expect(tester.widget<Text>(find.text(body)).maxLines, isNull);
 
-    final reloaded = NoteStore(await SharedPreferences.getInstance());
+    final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
     expect(reloaded.notes.single.showFull, isTrue);
   });
 }

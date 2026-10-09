@@ -1,14 +1,13 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
 
-import 'note.dart';
+import '../note.dart';
+import 'note_store.dart';
 
 /// Holds all notes in memory and persists them to SharedPreferences as JSON.
-class NoteStore extends ChangeNotifier {
-  NoteStore(this._prefs) {
+class LocalNoteStore extends NoteStore {
+  LocalNoteStore(this._prefs) {
     final raw = _prefs.getString(_key);
     if (raw != null) {
       final list = jsonDecode(raw) as List<dynamic>;
@@ -17,31 +16,18 @@ class NoteStore extends ChangeNotifier {
   }
 
   static const _key = 'notes_v1';
-  static const _uuid = Uuid();
 
   final SharedPreferences _prefs;
   final List<Note> _notes = [];
 
+  @override
   List<Note> get notes =>
       [..._notes]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
 
-  List<Note> search(String query) {
-    final q = query.trim().toLowerCase();
-    if (q.isEmpty) return notes;
-    return notes
-        .where(
-          (n) =>
-              n.title.toLowerCase().contains(q) ||
-              n.body.toLowerCase().contains(q),
-        )
-        .toList();
-  }
-
+  @override
   Note? byId(String id) => _notes.where((n) => n.id == id).firstOrNull;
 
-  Note newNote() => Note(id: _uuid.v4());
-
-  /// Inserts or replaces [note]. Empty notes are discarded instead of saved.
+  @override
   void upsert(Note note) {
     final i = _notes.indexWhere((n) => n.id == note.id);
     if (note.isEmpty) {
@@ -54,6 +40,7 @@ class NoteStore extends ChangeNotifier {
     _save();
   }
 
+  @override
   void delete(String id) {
     _notes.removeWhere((n) => n.id == id);
     _save();
