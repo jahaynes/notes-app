@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
-import 'editor_screen.dart';
 import 'note.dart';
 import 'store/note_store.dart';
 
@@ -26,33 +26,10 @@ class _NotesScreenState extends State<NotesScreen> {
     super.dispose();
   }
 
-  Future<void> _open(Note note) async {
-    final deleted = await Navigator.of(context).push<Note>(
-      MaterialPageRoute(
-        builder: (_) => EditorScreen(store: store, note: note),
-      ),
-    );
-    if (deleted != null && mounted) _showUndo(deleted);
-  }
-
   void _delete(Note note) {
     final backup = note.copy();
     store.delete(note.id);
-    _showUndo(backup);
-  }
-
-  void _showUndo(Note deleted) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: const Text('Note deleted'),
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: () => store.upsert(deleted),
-          ),
-        ),
-      );
+    showUndoDelete(context, store, backup);
   }
 
   void _stopSearching() {
@@ -97,7 +74,7 @@ class _NotesScreenState extends State<NotesScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _open(Note.create()),
+        onPressed: () => context.go('/new'),
         icon: const Icon(Icons.edit_outlined),
         label: const Text('New note'),
       ),
@@ -129,7 +106,7 @@ class _NotesScreenState extends State<NotesScreen> {
                             _NoteCard(
                               key: ValueKey(note.id),
                               note: note,
-                              onTap: () => _open(note),
+                              onTap: () => context.go('/note/${note.id}'),
                               onLongPress: () => _showActions(note),
                             ),
                         ],
@@ -166,6 +143,21 @@ class _NotesScreenState extends State<NotesScreen> {
       ),
     );
   }
+}
+
+/// Shows a "Note deleted" snackbar whose Undo restores [deleted].
+void showUndoDelete(BuildContext context, NoteStore store, Note deleted) {
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: const Text('Note deleted'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () => store.upsert(deleted),
+        ),
+      ),
+    );
 }
 
 /// Hideable side panel; empty for now.

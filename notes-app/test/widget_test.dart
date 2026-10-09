@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:noteish/store/local_note_store.dart';
+import 'package:go_router/go_router.dart';
+import 'package:noteish/editor_screen.dart';
 import 'package:noteish/main.dart';
 import 'package:noteish/note.dart';
 import 'package:noteish/store/note_store.dart';
@@ -76,5 +78,24 @@ void main() {
 
     final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
     expect(reloaded.notes.single.showFull, isTrue);
+  });
+
+  testWidgets('edits survive leaving via a URL change (browser back)', (
+    tester,
+  ) async {
+    final store = await _freshStore();
+    await tester.pumpWidget(NoteishApp(store: store));
+
+    await tester.tap(find.text('New note'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'Kept');
+
+    // Browser back replaces the route stack rather than popping the editor.
+    GoRouter.of(tester.element(find.byType(EditorScreen))).go('/');
+    await tester.pumpAndSettle();
+
+    expect(find.byType(EditorScreen), findsNothing);
+    expect(find.text('Kept'), findsOneWidget);
+    expect(store.notes.single.title, 'Kept');
   });
 }

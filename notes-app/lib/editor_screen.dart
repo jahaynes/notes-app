@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
+import 'package:go_router/go_router.dart';
+
 import 'note.dart';
+import 'notes_screen.dart';
 import 'store/note_store.dart';
 
-/// Edits a working copy of a note and saves it when the screen is left.
-/// Pops with the deleted note (for undo) if the user deletes it.
+/// Edits a working copy of a note, saving every change as it happens so that
+/// leaving by any route (app bar, system or browser back) keeps the edits.
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key, required this.store, required this.note});
 
@@ -17,17 +20,21 @@ class EditorScreen extends StatefulWidget {
 
 class _EditorScreenState extends State<EditorScreen> {
   late final Note _draft = widget.note.copy();
-  late final _title = TextEditingController(text: _draft.title);
-  late final _body = TextEditingController(text: _draft.body);
-  bool _deleted = false;
+  late final _title = TextEditingController(text: _draft.title)
+    ..addListener(_save);
+  late final _body = TextEditingController(text: _draft.body)
+    ..addListener(_save);
+
+  /// The note as last written to the store.
+  late Note _saved = widget.note.copy();
 
   bool get _contentChanged =>
-      _title.text != widget.note.title || _body.text != widget.note.body;
+      _title.text != _saved.title || _body.text != _saved.body;
 
   bool get _changed =>
       _contentChanged ||
-      _draft.colorIndex != widget.note.colorIndex ||
-      _draft.showFull != widget.note.showFull;
+      _draft.colorIndex != _saved.colorIndex ||
+      _draft.showFull != _saved.showFull;
 
   @override
   void dispose() {
@@ -37,20 +44,26 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _save() {
-    if (_deleted || !_changed) return;
+    if (!_changed) return;
     _draft
       ..title = _title.text
       ..body = _body.text;
     // Only bump the timestamp for content edits, not display tweaks.
     if (_contentChanged) _draft.updatedAt = DateTime.now();
-    widget.store.upsert(_draft);
+    _saved = _draft.copy();
+    widget.store.upsert(_saved.copy());
+  }
+
+  void _update(VoidCallback change) {
+    setState(change);
+    _save();
   }
 
   void _delete() {
-    _deleted = true;
-    final existed = widget.store.byId(widget.note.id) != null;
-    widget.store.delete(widget.note.id);
-    Navigator.of(context).pop(existed ? widget.note.copy() : null);
+    final deleted = widget.store.byId(_draft.id);
+    widget.store.delete(_draft.id);
+    if (deleted != null) showUndoDelete(context, widget.store, deleted);
+    context.pop();
   }
 
   void _pickColor() {
@@ -69,7 +82,7 @@ class _EditorScreenState extends State<EditorScreen> {
                   color: noteColors[i],
                   selected: _draft.colorIndex == i,
                   onTap: () {
-                    setState(() => _draft.colorIndex = i);
+                    _update(() => _draft.colorIndex = i);
                     Navigator.pop(sheetContext);
                   },
                 ),
@@ -86,83 +99,78 @@ class _EditorScreenState extends State<EditorScreen> {
     final bg = noteColors[_draft.colorIndex];
     final fg = bg != null ? Colors.black87 : theme.colorScheme.onSurface;
 
-    return PopScope(
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) _save();
-      },
-      child: Scaffold(
+    return Scaffold(
+      backgroundColor: bg,
+      appBar: AppBar(
         backgroundColor: bg,
-        appBar: AppBar(
-          backgroundColor: bg,
-          foregroundColor: bg != null ? Colors.black87 : null,
-          actions: [
-            InkWell(
-              borderRadius: BorderRadius.circular(20),
-              onTap: () => setState(() => _draft.showFull = !_draft.showFull),
-              child: Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Row(
-                  children: [
-                    Checkbox(
-                      value: _draft.showFull,
-                      onChanged: (v) => setState(() => _draft.showFull = v!),
-                      side: BorderSide(color: fg, width: 2),
-                    ),
-                    Text(
-                      'Show in full',
-                      style: theme.textTheme.labelLarge?.copyWith(color: fg),
-                    ),
-                  ],
-                ),
+        foregroundColor: bg != null ? Colors.black87 : null,
+        actions: [
+          InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: () => _update(() => _draft.showFull = !_draft.showFull),
+            child: Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: _draft.showFull,
+                    onChanged: (v) => _update(() => _draft.showFull = v!),
+                    side: BorderSide(color: fg, width: 2),
+                  ),
+                  Text(
+                    'Show in full',
+                    style: theme.textTheme.labelLarge?.copyWith(color: fg),
+                  ),
+                ],
               ),
             ),
-            IconButton(
-              tooltip: 'Color',
-              icon: const Icon(Icons.palette_outlined),
-              onPressed: _pickColor,
-            ),
-            IconButton(
-              tooltip: 'Delete',
-              icon: const Icon(Icons.delete_outline),
-              onPressed: _delete,
-            ),
-          ],
-        ),
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Column(
-              children: [
-                TextField(
-                  controller: _title,
-                  autofocus: widget.note.isEmpty,
+          ),
+          IconButton(
+            tooltip: 'Color',
+            icon: const Icon(Icons.palette_outlined),
+            onPressed: _pickColor,
+          ),
+          IconButton(
+            tooltip: 'Delete',
+            icon: const Icon(Icons.delete_outline),
+            onPressed: _delete,
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Column(
+            children: [
+              TextField(
+                controller: _title,
+                autofocus: widget.note.isEmpty,
+                textCapitalization: TextCapitalization.sentences,
+                style: theme.textTheme.headlineSmall?.copyWith(color: fg),
+                decoration: InputDecoration(
+                  hintText: 'Title',
+                  hintStyle: TextStyle(color: fg.withValues(alpha: 0.4)),
+                  border: InputBorder.none,
+                ),
+                textInputAction: TextInputAction.next,
+              ),
+              Expanded(
+                child: TextField(
+                  controller: _body,
+                  maxLines: null,
+                  expands: true,
+                  textAlignVertical: TextAlignVertical.top,
                   textCapitalization: TextCapitalization.sentences,
-                  style: theme.textTheme.headlineSmall?.copyWith(color: fg),
+                  keyboardType: TextInputType.multiline,
+                  style: theme.textTheme.bodyLarge?.copyWith(color: fg),
                   decoration: InputDecoration(
-                    hintText: 'Title',
+                    hintText: 'Start writing…',
                     hintStyle: TextStyle(color: fg.withValues(alpha: 0.4)),
                     border: InputBorder.none,
                   ),
-                  textInputAction: TextInputAction.next,
                 ),
-                Expanded(
-                  child: TextField(
-                    controller: _body,
-                    maxLines: null,
-                    expands: true,
-                    textAlignVertical: TextAlignVertical.top,
-                    textCapitalization: TextCapitalization.sentences,
-                    keyboardType: TextInputType.multiline,
-                    style: theme.textTheme.bodyLarge?.copyWith(color: fg),
-                    decoration: InputDecoration(
-                      hintText: 'Start writing…',
-                      hintStyle: TextStyle(color: fg.withValues(alpha: 0.4)),
-                      border: InputBorder.none,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
