@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:noteish/store/local_note_store.dart';
 import 'package:go_router/go_router.dart';
@@ -390,6 +391,69 @@ void main() {
     final two = tester.getRect(find.text('Two'));
     expect(one.top, two.top);
     expect(one.left, isNot(two.left));
+  });
+
+  testWidgets('opening a note cancels ticked topics', (tester) async {
+    final store = await _freshStore();
+    await store.dispatch(AddTopic(Topic.create('Work')));
+    await store.dispatch(SaveNote(Note.create().copyWith(title: 'Loose')));
+    await tester.pumpWidget(NoteishApp(store: store));
+    await tester.tap(find.byTooltip('Show sidebar'));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.widgetWithText(ListTile, 'Work'));
+    await tester.pump();
+    expect(find.text('1 topic selected'), findsOneWidget);
+
+    await tester.tap(find.text('Loose'));
+    await tester.pumpAndSettle();
+    expect(find.byType(EditorScreen), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('1 topic selected'), findsNothing);
+    expect(find.byType(Checkbox), findsNothing);
+  });
+
+  testWidgets('the hidden sidebar takes no keyboard focus', (tester) async {
+    final store = await _freshStore();
+    await tester.pumpWidget(NoteishApp(store: store));
+
+    String? focusedTooltip() => FocusManager.instance.primaryFocus?.context
+        ?.findAncestorWidgetOfExactType<Tooltip>()
+        ?.message;
+    final reached = <String?>[];
+    for (var i = 0; i < 6; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      reached.add(focusedTooltip());
+    }
+    expect(reached, isNot(contains('Add topic')));
+
+    await tester.tap(find.byTooltip('Show sidebar'));
+    await tester.pumpAndSettle();
+    reached.clear();
+    for (var i = 0; i < 6; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      reached.add(focusedTooltip());
+    }
+    expect(reached, contains('Add topic'));
+  });
+
+  testWidgets('back closes search rather than the app', (tester) async {
+    final store = await _freshStore();
+    await store.dispatch(SaveNote(Note.create().copyWith(title: 'One')));
+    await store.dispatch(SaveNote(Note.create().copyWith(title: 'Two')));
+    await tester.pumpWidget(NoteishApp(store: store));
+    await tester.tap(find.byTooltip('Search'));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), 'one');
+    await tester.pump();
+    expect(find.text('Two'), findsNothing);
+
+    expect(await tester.binding.handlePopRoute(), isTrue);
+    await tester.pump();
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('Two'), findsOneWidget);
   });
 
   testWidgets('show in full removes truncation on the overview', (

@@ -61,6 +61,12 @@ class _NotesScreenState extends State<NotesScreen> {
     _endDrag();
   }
 
+  void _openNote(Note note) {
+    // Leaving to edit a note abandons any topics ticked for deletion.
+    if (_selectedTopics.isNotEmpty) setState(_selectedTopics.clear);
+    context.go('/note/${note.id}');
+  }
+
   void _toggleNote(Note note) => setState(() {
     _selectedTopics.clear();
     if (!_selectedNotes.remove(note.id)) _selectedNotes.add(note.id);
@@ -151,17 +157,25 @@ class _NotesScreenState extends State<NotesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Back leaves selection mode before it leaves the screen.
+    // Back leaves selection mode, then search, before it leaves the screen.
     return PopScope(
-      canPop: !_selecting,
+      canPop: !_selecting && !_searching,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _clearSelection();
+        if (didPop) return;
+        if (_selecting) {
+          _clearSelection();
+        } else {
+          _stopSearching();
+        }
       },
       child: Scaffold(
         appBar: _selecting ? _selectionAppBar() : _appBar(),
         floatingActionButton: _selecting
             ? null
             : FloatingActionButton.extended(
+                // No hero: the editor has no FAB to fly to, and the button can
+                // briefly exist twice when selection mode ends mid-animation.
+                heroTag: null,
                 onPressed: () => context.go(
                   _topicId == null ? '/new' : '/new?topic=$_topicId',
                 ),
@@ -302,7 +316,7 @@ class _NotesScreenState extends State<NotesScreen> {
                                 : null,
                             onTap: _selectedNotes.isNotEmpty
                                 ? () => _toggleNote(note)
-                                : () => context.go('/note/${note.id}'),
+                                : () => _openNote(note),
                           ),
                         ),
                     ],
@@ -377,92 +391,102 @@ class _Sidebar extends StatelessWidget {
         color: scheme.surfaceContainerLow,
         // Lay out at full width so the contents slide rather than squash while
         // the panel animates.
-        child: OverflowBox(
-          alignment: Alignment.topLeft,
-          minWidth: _width,
-          maxWidth: _width,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Topics',
-                        style: Theme.of(context).textTheme.titleSmall
-                            ?.copyWith(color: scheme.onSurfaceVariant),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.add),
-                      tooltip: 'Add topic',
-                      onPressed: () => _addTopic(context),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: ValueListenableBuilder(
-                  valueListenable: store.topics,
-                  builder: (context, topics, _) => ListTileTheme(
-                    selectedColor: scheme.onSecondaryContainer,
-                    selectedTileColor: scheme.secondaryContainer,
-                    child: ListView(
+        // When hidden, keep the clipped-away contents out of keyboard focus
+        // and screen readers.
+        child: ExcludeFocus(
+          excluding: !open,
+          child: ExcludeSemantics(
+            excluding: !open,
+            child: OverflowBox(
+              alignment: Alignment.topLeft,
+              minWidth: _width,
+              maxWidth: _width,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+                    child: Row(
                       children: [
-                        ListTile(
-                          dense: true,
-                          leading: const Icon(Icons.notes),
-                          title: const Text('(All)'),
-                          selected: selectedTopicId == null,
-                          enabled: !selecting,
-                          onTap: () => onSelect(null),
-                        ),
-                        for (final topic in topics)
-                          DragTarget<_NoteDrag>(
-                            key: ValueKey(topic.id),
-                            onAcceptWithDetails: (details) =>
-                                onDropNotes(details.data.ids, topic.id),
-                            builder: (context, candidates, _) => ListTile(
-                              dense: true,
-                              // Highlight the topic a dragged note is over.
-                              tileColor: candidates.isEmpty
-                                  ? null
-                                  : scheme.primaryContainer,
-                              selected: topic.id == selectedTopicId,
-                              // The default topic can't be ticked for deletion.
-                              enabled: !(selecting && topic.isDefault),
-                              onTap: selecting
-                                  ? () => onToggle(topic)
-                                  : () => onSelect(topic.id),
-                              onLongPress: topic.isDefault
-                                  ? null
-                                  : () => onToggle(topic),
-                              trailing: selecting && !topic.isDefault
-                                  ? Checkbox(
-                                      value: checkedTopicIds.contains(topic.id),
-                                      onChanged: (_) => onToggle(topic),
-                                    )
-                                  : null,
-                              leading: Icon(
-                                topic.isDefault
-                                    ? Icons.inbox_outlined
-                                    : Icons.label_outline,
-                              ),
-                              title: Text(
-                                topic.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
+                        Expanded(
+                          child: Text(
+                            'Topics',
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
                           ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.add),
+                          tooltip: 'Add topic',
+                          onPressed: () => _addTopic(context),
+                        ),
                       ],
                     ),
                   ),
-                ),
+                  Expanded(
+                    child: ValueListenableBuilder(
+                      valueListenable: store.topics,
+                      builder: (context, topics, _) => ListTileTheme(
+                        selectedColor: scheme.onSecondaryContainer,
+                        selectedTileColor: scheme.secondaryContainer,
+                        child: ListView(
+                          children: [
+                            ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.notes),
+                              title: const Text('(All)'),
+                              selected: selectedTopicId == null,
+                              enabled: !selecting,
+                              onTap: () => onSelect(null),
+                            ),
+                            for (final topic in topics)
+                              DragTarget<_NoteDrag>(
+                                key: ValueKey(topic.id),
+                                onAcceptWithDetails: (details) =>
+                                    onDropNotes(details.data.ids, topic.id),
+                                builder: (context, candidates, _) => ListTile(
+                                  dense: true,
+                                  // Highlight the topic a dragged note is over.
+                                  tileColor: candidates.isEmpty
+                                      ? null
+                                      : scheme.primaryContainer,
+                                  selected: topic.id == selectedTopicId,
+                                  // The default topic can't be ticked for deletion.
+                                  enabled: !(selecting && topic.isDefault),
+                                  onTap: selecting
+                                      ? () => onToggle(topic)
+                                      : () => onSelect(topic.id),
+                                  onLongPress: topic.isDefault
+                                      ? null
+                                      : () => onToggle(topic),
+                                  trailing: selecting && !topic.isDefault
+                                      ? Checkbox(
+                                          value: checkedTopicIds.contains(
+                                            topic.id,
+                                          ),
+                                          onChanged: (_) => onToggle(topic),
+                                        )
+                                      : null,
+                                  leading: Icon(
+                                    topic.isDefault
+                                        ? Icons.inbox_outlined
+                                        : Icons.label_outline,
+                                  ),
+                                  title: Text(
+                                    topic.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
