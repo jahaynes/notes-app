@@ -52,16 +52,19 @@ class LocalNoteStore extends NoteStore {
         await _saveNotes(_lastDeleted.value);
       case AddTopic(:final topic):
         await _setTopics([..._topics.value, topic]);
-      case DeleteTopic(:final id):
-        if (id == Topic.uncategorisedId) return;
+      case DeleteTopics(:final ids):
+        final idSet = ids.toSet()..remove(Topic.uncategorisedId);
+        if (idSet.isEmpty) return;
         await _setTopics([
           for (final t in _topics.value)
-            if (t.id != id) t,
+            if (!idSet.contains(t.id)) t,
         ]);
-        if (_notes.value.any((n) => n.topicId == id)) {
+        if (_notes.value.any((n) => idSet.contains(n.topicId))) {
           await _setNotes([
             for (final n in _notes.value)
-              n.topicId == id ? n.copyWith(topicId: Topic.uncategorisedId) : n,
+              idSet.contains(n.topicId)
+                  ? n.copyWith(topicId: Topic.uncategorisedId)
+                  : n,
           ]);
         }
     }

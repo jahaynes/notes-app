@@ -36,12 +36,12 @@ final class AddTopic extends NoteAction {
   final Topic topic;
 }
 
-/// Removes the topic with [id], moving its notes to [Topic.uncategorised].
-/// The default topic can't be deleted.
-final class DeleteTopic extends NoteAction {
-  const DeleteTopic(this.id);
+/// Removes the topics with [ids], moving their notes to
+/// [Topic.uncategorised]. The default topic can't be deleted.
+final class DeleteTopics extends NoteAction {
+  const DeleteTopics(this.ids);
 
-  final String id;
+  final Iterable<String> ids;
 }
 
 /// Source of truth for notes. Actions flow in through [dispatch]; the

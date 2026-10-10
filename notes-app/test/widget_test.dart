@@ -39,8 +39,8 @@ void main() {
     final home = Topic.create('Home');
     await store.dispatch(AddTopic(work));
     await store.dispatch(AddTopic(home));
-    await store.dispatch(DeleteTopic(work.id));
-    await store.dispatch(DeleteTopic(Topic.uncategorised.id)); // ignored
+    await store.dispatch(DeleteTopics([work.id]));
+    await store.dispatch(DeleteTopics([Topic.uncategorisedId])); // ignored
 
     expect(store.topics.value, [Topic.uncategorised, home]);
 
@@ -97,6 +97,82 @@ void main() {
     expect(find.byTooltip('Delete topic'), findsNothing);
   });
 
+  testWidgets('long-press selects several topics to delete, with a prompt', (
+    tester,
+  ) async {
+    final store = await _freshStore();
+    final [a, b, c] = [
+      for (final n in ['A', 'B', 'C']) Topic.create(n),
+    ];
+    for (final t in [a, b, c]) {
+      await store.dispatch(AddTopic(t));
+    }
+    await store.dispatch(
+      SaveNote(Note.create(topicId: a.id).copyWith(title: 'In A')),
+    );
+    await store.dispatch(
+      SaveNote(Note.create(topicId: b.id).copyWith(title: 'In B')),
+    );
+    await tester.pumpWidget(NoteishApp(store: store));
+    await tester.tap(find.byTooltip('Show sidebar'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ListTile, 'A'));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.widgetWithText(ListTile, 'A'));
+    await tester.pump();
+    expect(find.text('1 topic selected'), findsOneWidget);
+    expect(find.byType(Checkbox), findsNWidgets(3));
+
+    // In selection mode a tap ticks rather than switching topic.
+    await tester.tap(find.widgetWithText(ListTile, 'B'));
+    await tester.pump();
+    expect(find.text('2 topics selected'), findsOneWidget);
+    expect(find.text('In A'), findsOneWidget);
+
+    // Uncategorised and (All) can't be ticked, or switched to, meanwhile.
+    await tester.tap(find.widgetWithText(ListTile, 'Uncategorised'));
+    await tester.tap(find.widgetWithText(ListTile, '(All)'));
+    await tester.pump();
+    expect(find.text('2 topics selected'), findsOneWidget);
+    expect(find.text('In B'), findsNothing);
+
+    await tester.tap(find.byTooltip('Delete selected topics'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete 2 topics?'), findsOneWidget);
+    expect(
+      find.text('Their 2 notes will be moved to Uncategorised.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(store.topics.value.length, 4);
+    expect(find.text('2 topics selected'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Delete selected topics'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+    expect(store.topics.value, [Topic.uncategorised, c]);
+    expect(find.byType(Checkbox), findsNothing);
+
+    // A was being shown, so the view follows its note to Uncategorised.
+    expect(find.text('In A'), findsOneWidget);
+    expect(find.text('In B'), findsOneWidget);
+    expect(
+      store.notes.value.map((n) => n.topicId),
+      everyElement(Topic.uncategorisedId),
+    );
+
+    // Back leaves selection mode.
+    await tester.longPress(find.widgetWithText(ListTile, 'C'));
+    await tester.pump();
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(find.byType(Checkbox), findsNothing);
+    expect(store.topics.value.length, 2);
+  });
+
   test('deleting a topic moves its notes to Uncategorised', () async {
     final store = await _freshStore();
     final work = Topic.create('Work');
@@ -105,7 +181,7 @@ void main() {
     await store.dispatch(SaveNote(note));
     await store.dispatch(DeleteNotes([note.id]));
 
-    await store.dispatch(DeleteTopic(work.id));
+    await store.dispatch(DeleteTopics([work.id]));
     expect(store.notes.value, isEmpty);
 
     // Restoring a note whose topic has gone puts it in Uncategorised too.

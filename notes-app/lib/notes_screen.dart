@@ -22,10 +22,13 @@ class _NotesScreenState extends State<NotesScreen> {
   /// The topic whose notes are shown, or null to show all notes.
   String? _topicId = Topic.uncategorisedId;
 
-  /// Ids of the notes ticked for deletion. Non-empty means selection mode.
-  final _selected = <String>{};
+  /// Ids of the notes, or of the topics, ticked for deletion. Only one kind
+  /// is ticked at a time; either being non-empty means selection mode.
+  final _selectedNotes = <String>{};
+  final _selectedTopics = <String>{};
 
-  bool get _selecting => _selected.isNotEmpty;
+  bool get _selecting =>
+      _selectedNotes.isNotEmpty || _selectedTopics.isNotEmpty;
 
   NoteStore get store => widget.store;
 
@@ -35,17 +38,31 @@ class _NotesScreenState extends State<NotesScreen> {
     super.dispose();
   }
 
-  void _toggleSelected(Note note) => setState(
-    () => _selected.contains(note.id)
-        ? _selected.remove(note.id)
-        : _selected.add(note.id),
-  );
+  void _toggleNote(Note note) => setState(() {
+    _selectedTopics.clear();
+    if (!_selectedNotes.remove(note.id)) _selectedNotes.add(note.id);
+  });
 
-  void _clearSelection() => setState(_selected.clear);
+  void _toggleTopic(Topic topic) => setState(() {
+    _selectedNotes.clear();
+    if (!_selectedTopics.remove(topic.id)) _selectedTopics.add(topic.id);
+  });
+
+  void _clearSelection() => setState(() {
+    _selectedNotes.clear();
+    _selectedTopics.clear();
+  });
 
   void _deleteSelected() {
-    store.dispatch(DeleteNotes(_selected.toList()));
-    _clearSelection();
+    if (_selectedNotes.isNotEmpty) {
+      store.dispatch(DeleteNotes(_selectedNotes.toList()));
+      _clearSelection();
+    } else {
+      _deleteTopics([
+        for (final t in store.topics.value)
+          if (_selectedTopics.contains(t.id)) t,
+      ]);
+    }
   }
 
   /// The selected topic, or null when showing all notes.
@@ -56,19 +73,30 @@ class _NotesScreenState extends State<NotesScreen> {
           orElse: () => Topic.uncategorised,
         );
 
-  Future<void> _deleteSelectedTopic() async {
-    final topic = _selectedTopic;
-    if (topic == null || topic.isDefault) return;
-    final count = store.search('', topicId: topic.id).length;
+  /// Deletes [topics] once the user confirms, moving their notes to
+  /// Uncategorised. There's no undo for topics, hence the prompt.
+  Future<void> _deleteTopics(List<Topic> topics) async {
+    if (topics.isEmpty) return;
+    final one = topics.length == 1;
+    final ids = {for (final t in topics) t.id};
+    final count = store.notes.value
+        .where((n) => ids.contains(n.topicId))
+        .length;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text('Delete "${topic.name}"?'),
+        title: Text(
+          one
+              ? 'Delete "${topics.single.name}"?'
+              : 'Delete ${topics.length} topics?',
+        ),
         content: Text(
           count == 0
-              ? 'This topic has no notes.'
-              : 'Its ${count == 1 ? 'note' : '$count notes'} will be moved '
-                    'to Uncategorised.',
+              ? (one
+                    ? 'This topic has no notes.'
+                    : 'These topics have no notes.')
+              : '${one ? 'Its' : 'Their'} ${count == 1 ? 'note' : '$count notes'} '
+                    'will be moved to Uncategorised.',
         ),
         actions: [
           TextButton(
@@ -83,9 +111,12 @@ class _NotesScreenState extends State<NotesScreen> {
       ),
     );
     if (confirmed != true) return;
-    store.dispatch(DeleteTopic(topic.id));
-    // Its notes move to Uncategorised, so follow them there.
-    setState(() => _topicId = Topic.uncategorisedId);
+    store.dispatch(DeleteTopics(ids));
+    setState(() {
+      _selectedTopics.clear();
+      // If the shown topic went, follow its notes to Uncategorised.
+      if (ids.contains(_topicId)) _topicId = Topic.uncategorisedId;
+    });
   }
 
   void _stopSearching() {
@@ -125,11 +156,18 @@ class _NotesScreenState extends State<NotesScreen> {
       tooltip: 'Cancel selection',
       onPressed: _clearSelection,
     ),
-    title: Text('${_selected.length} selected'),
+    title: Text(
+      _selectedNotes.isNotEmpty
+          ? '${_selectedNotes.length} selected'
+          : '${_selectedTopics.length} '
+                '${_selectedTopics.length == 1 ? 'topic' : 'topics'} selected',
+    ),
     actions: [
       IconButton(
         icon: const Icon(Icons.delete_outline),
-        tooltip: 'Delete selected',
+        tooltip: _selectedNotes.isNotEmpty
+            ? 'Delete selected'
+            : 'Delete selected topics',
         onPressed: _deleteSelected,
       ),
     ],
@@ -182,7 +220,7 @@ class _NotesScreenState extends State<NotesScreen> {
         IconButton(
           icon: const Icon(Icons.delete_outline),
           tooltip: 'Delete topic',
-          onPressed: _deleteSelectedTopic,
+          onPressed: () => _deleteTopics([_selectedTopic!]),
         ),
     ],
   );
@@ -193,10 +231,13 @@ class _NotesScreenState extends State<NotesScreen> {
         store: store,
         open: _sidebarOpen,
         selectedTopicId: _topicId,
+        checkedTopicIds: _selectedTopics,
+        onToggle: _toggleTopic,
         onSelect: (id) => setState(() {
           _topicId = id;
           // Don't let notes that are no longer shown stay ticked.
-          _selected.clear();
+          _selectedNotes.clear();
+          _selectedTopics.clear();
         }),
       ),
       Expanded(
@@ -225,13 +266,13 @@ class _NotesScreenState extends State<NotesScreen> {
                         _NoteCard(
                           key: ValueKey(note.id),
                           note: note,
-                          selected: _selecting
-                              ? _selected.contains(note.id)
+                          selected: _selectedNotes.isNotEmpty
+                              ? _selectedNotes.contains(note.id)
                               : null,
-                          onTap: _selecting
-                              ? () => _toggleSelected(note)
+                          onTap: _selectedNotes.isNotEmpty
+                              ? () => _toggleNote(note)
                               : () => context.go('/note/${note.id}'),
-                          onLongPress: () => _toggleSelected(note),
+                          onLongPress: () => _toggleNote(note),
                         ),
                     ],
                   ),
@@ -252,6 +293,8 @@ class _Sidebar extends StatelessWidget {
     required this.open,
     required this.selectedTopicId,
     required this.onSelect,
+    required this.checkedTopicIds,
+    required this.onToggle,
   });
 
   static const _width = 240.0;
@@ -262,6 +305,12 @@ class _Sidebar extends StatelessWidget {
   /// The selected topic's id, or null when "(All)" is selected.
   final String? selectedTopicId;
   final ValueChanged<String?> onSelect;
+
+  /// Ids of the topics ticked for deletion. Non-empty means selection mode.
+  final Set<String> checkedTopicIds;
+
+  /// Ticks or unticks a topic for deletion.
+  final ValueChanged<Topic> onToggle;
 
   Future<void> _addTopic(BuildContext context) async {
     final name = await showDialog<String>(
@@ -277,6 +326,7 @@ class _Sidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final selecting = checkedTopicIds.isNotEmpty;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
       curve: Curves.easeInOut,
@@ -320,6 +370,7 @@ class _Sidebar extends StatelessWidget {
                           leading: const Icon(Icons.notes),
                           title: const Text('(All)'),
                           selected: selectedTopicId == null,
+                          enabled: !selecting,
                           onTap: () => onSelect(null),
                         ),
                         for (final topic in topics)
@@ -327,7 +378,20 @@ class _Sidebar extends StatelessWidget {
                             key: ValueKey(topic.id),
                             dense: true,
                             selected: topic.id == selectedTopicId,
-                            onTap: () => onSelect(topic.id),
+                            // The default topic can't be ticked for deletion.
+                            enabled: !(selecting && topic.isDefault),
+                            onTap: selecting
+                                ? () => onToggle(topic)
+                                : () => onSelect(topic.id),
+                            onLongPress: topic.isDefault
+                                ? null
+                                : () => onToggle(topic),
+                            trailing: selecting && !topic.isDefault
+                                ? Checkbox(
+                                    value: checkedTopicIds.contains(topic.id),
+                                    onChanged: (_) => onToggle(topic),
+                                  )
+                                : null,
                             leading: Icon(
                               topic.isDefault
                                   ? Icons.inbox_outlined
