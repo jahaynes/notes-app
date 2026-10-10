@@ -59,7 +59,7 @@ void main() {
     expect(find.widgetWithText(ListTile, 'Uncategorised'), findsOneWidget);
     expect(find.byTooltip('Delete topic'), findsNothing);
 
-    await tester.tap(find.text('Add topic'));
+    await tester.tap(find.byTooltip('Add topic'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), '  Recipes ');
     await tester.pump();
@@ -372,6 +372,24 @@ void main() {
     for (final n in store.notes.value) {
       expect(n.updatedAt, stamps[n.id]);
     }
+  });
+
+  testWidgets('a phone-width screen fits two notes side by side', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 780);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final store = await _freshStore();
+    for (final title in ['One', 'Two']) {
+      await store.dispatch(SaveNote(Note.create().copyWith(title: title)));
+    }
+    await tester.pumpWidget(NoteishApp(store: store));
+
+    final one = tester.getRect(find.text('One'));
+    final two = tester.getRect(find.text('Two'));
+    expect(one.top, two.top);
+    expect(one.left, isNot(two.left));
   });
 
   testWidgets('show in full removes truncation on the overview', (

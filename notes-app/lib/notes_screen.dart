@@ -277,10 +277,12 @@ class _NotesScreenState extends State<NotesScreen> {
             }
             return LayoutBuilder(
               builder: (context, constraints) {
-                final columns = (constraints.maxWidth / 240).floor().clamp(
-                  1,
-                  5,
-                );
+                // Aim for 240-wide cards, but fit two side by side on a phone
+                // as long as each gets at least 150.
+                final width = constraints.maxWidth;
+                final columns = width < 2 * 150
+                    ? 1
+                    : (width / 240).floor().clamp(2, 5);
                 return SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
                   child: _Masonry(
@@ -383,11 +385,22 @@ class _Sidebar extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Text(
-                  'Topics',
-                  style: Theme.of(context).textTheme.titleSmall
-                      ?.copyWith(color: scheme.onSurfaceVariant),
+                padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Topics',
+                        style: Theme.of(context).textTheme.titleSmall
+                            ?.copyWith(color: scheme.onSurfaceVariant),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add),
+                      tooltip: 'Add topic',
+                      onPressed: () => _addTopic(context),
+                    ),
+                  ],
                 ),
               ),
               Expanded(
@@ -448,12 +461,6 @@ class _Sidebar extends StatelessWidget {
                     ),
                   ),
                 ),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.add),
-                title: const Text('Add topic'),
-                onTap: () => _addTopic(context),
               ),
             ],
           ),
