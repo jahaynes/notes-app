@@ -6,6 +6,7 @@ import 'package:noteish/editor_screen.dart';
 import 'package:noteish/main.dart';
 import 'package:noteish/note.dart';
 import 'package:noteish/store/note_store.dart';
+import 'package:noteish/topic.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Future<NoteStore> _freshStore() async {
@@ -28,6 +29,48 @@ void main() {
     // Reload from the same prefs.
     final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
     expect(reloaded.notes.value.length, 2);
+  });
+
+  test('topics persist, and the default topic is undeletable', () async {
+    final store = await _freshStore();
+    expect(store.topics.value, [Topic.uncategorised]);
+
+    final work = Topic.create('Work');
+    final home = Topic.create('Home');
+    await store.dispatch(AddTopic(work));
+    await store.dispatch(AddTopic(home));
+    await store.dispatch(DeleteTopic(work.id));
+    await store.dispatch(DeleteTopic(Topic.uncategorised.id)); // ignored
+
+    expect(store.topics.value, [Topic.uncategorised, home]);
+
+    final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
+    expect(reloaded.topics.value, [Topic.uncategorised, home]);
+  });
+
+  testWidgets('add and delete topics from the sidebar', (tester) async {
+    final store = await _freshStore();
+    await tester.pumpWidget(NoteishApp(store: store));
+    await tester.tap(find.byTooltip('Show sidebar'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Uncategorised'), findsOneWidget);
+    expect(find.byTooltip('Delete topic'), findsNothing);
+
+    await tester.tap(find.text('Add topic'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '  Recipes ');
+    await tester.pump();
+    await tester.tap(find.text('Add'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Recipes'), findsOneWidget);
+    expect(store.topics.value.last.name, 'Recipes');
+
+    await tester.tap(find.byTooltip('Delete topic'));
+    await tester.pumpAndSettle();
+    expect(find.text('Recipes'), findsNothing);
+    expect(store.topics.value, [Topic.uncategorised]);
   });
 
   testWidgets('create, edit, and delete a note with undo', (tester) async {

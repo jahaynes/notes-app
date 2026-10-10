@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import 'note.dart';
 import 'store/note_store.dart';
+import 'topic.dart';
 
 class NotesScreen extends StatefulWidget {
   const NotesScreen({super.key, required this.store});
@@ -79,7 +80,7 @@ class _NotesScreenState extends State<NotesScreen> {
       ),
       body: Row(
         children: [
-          _Sidebar(open: _sidebarOpen),
+          _Sidebar(store: store, open: _sidebarOpen),
           Expanded(
             child: ListenableBuilder(
               listenable: store.notes,
@@ -159,11 +160,22 @@ void showUndoDelete(BuildContext context, NoteStore store, Note deleted) {
     );
 }
 
-/// Hideable side panel; empty for now.
+/// Hideable side panel listing the topics.
 class _Sidebar extends StatelessWidget {
-  const _Sidebar({required this.open});
+  const _Sidebar({required this.store, required this.open});
 
+  static const _width = 240.0;
+
+  final NoteStore store;
   final bool open;
+
+  Future<void> _addTopic(BuildContext context) async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => const _AddTopicDialog(),
+    );
+    if (name != null) store.dispatch(AddTopic(Topic.create(name)));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -171,15 +183,124 @@ class _Sidebar extends StatelessWidget {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
       curve: Curves.easeInOut,
-      width: open ? 240 : 0,
+      width: open ? _width : 0,
       clipBehavior: Clip.hardEdge,
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
         border: open
             ? Border(right: BorderSide(color: scheme.outlineVariant))
             : null,
       ),
-      child: const SizedBox.shrink(),
+      // The background is a Material so the list tiles' ink shows on it.
+      child: Material(
+        color: scheme.surfaceContainerLow,
+        // Lay out at full width so the contents slide rather than squash while
+        // the panel animates.
+        child: OverflowBox(
+          alignment: Alignment.topLeft,
+          minWidth: _width,
+          maxWidth: _width,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Topics',
+                  style: Theme.of(context).textTheme.titleSmall
+                      ?.copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ),
+              Expanded(
+                child: ValueListenableBuilder(
+                  valueListenable: store.topics,
+                  builder: (context, topics, _) => ListView(
+                    children: [
+                      for (final topic in topics)
+                        ListTile(
+                          key: ValueKey(topic.id),
+                          dense: true,
+                          leading: Icon(
+                            topic.isDefault
+                                ? Icons.inbox_outlined
+                                : Icons.label_outline,
+                          ),
+                          title: Text(
+                            topic.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: topic.isDefault
+                              ? null
+                              : IconButton(
+                                  icon: const Icon(Icons.close, size: 18),
+                                  tooltip: 'Delete topic',
+                                  onPressed: () =>
+                                      store.dispatch(DeleteTopic(topic.id)),
+                                ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.add),
+                title: const Text('Add topic'),
+                onTap: () => _addTopic(context),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Asks for a topic name; pops with the trimmed name, or null if cancelled.
+class _AddTopicDialog extends StatefulWidget {
+  const _AddTopicDialog();
+
+  @override
+  State<_AddTopicDialog> createState() => _AddTopicDialogState();
+}
+
+class _AddTopicDialogState extends State<_AddTopicDialog> {
+  final _name = TextEditingController();
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  String get _trimmed => _name.text.trim();
+
+  void _submit() {
+    if (_trimmed.isNotEmpty) Navigator.pop(context, _trimmed);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('New topic'),
+      content: TextField(
+        controller: _name,
+        autofocus: true,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: const InputDecoration(hintText: 'Name'),
+        onChanged: (_) => setState(() {}),
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _trimmed.isEmpty ? null : _submit,
+          child: const Text('Add'),
+        ),
+      ],
     );
   }
 }
