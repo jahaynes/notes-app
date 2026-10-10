@@ -20,6 +20,7 @@ class LocalNoteStore extends NoteStore {
   final SharedPreferences _prefs;
   final ValueNotifier<List<Note>> _notes;
   final ValueNotifier<List<Topic>> _topics;
+  final _lastDeleted = ValueNotifier<Note?>(null);
 
   @override
   ValueListenable<List<Note>> get notes => _notes;
@@ -28,15 +29,22 @@ class LocalNoteStore extends NoteStore {
   ValueListenable<List<Topic>> get topics => _topics;
 
   @override
+  ValueListenable<Note?> get lastDeleted => _lastDeleted;
+
+  @override
   Future<void> dispatch(NoteAction action) async {
     switch (action) {
       case SaveNote(:final note):
+        if (note.id == _lastDeleted.value?.id) _lastDeleted.value = null;
         await _setNotes([
           for (final n in _notes.value)
             if (n.id != note.id) n,
           if (!note.isEmpty) note,
         ]);
       case DeleteNote(:final id):
+        final deleted = byId(id);
+        if (deleted == null) return;
+        _lastDeleted.value = deleted;
         await _setNotes([
           for (final n in _notes.value)
             if (n.id != id) n,

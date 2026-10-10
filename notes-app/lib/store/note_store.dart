@@ -46,6 +46,10 @@ abstract class NoteStore {
   /// were added. Published the same way as [notes].
   ValueListenable<List<Topic>> get topics;
 
+  /// The most recently deleted note, so it can be restored by saving it again.
+  /// Cleared once it's restored. Not persisted.
+  ValueListenable<Note?> get lastDeleted;
+
   /// Applies [action]. Completes once the change has been persisted.
   Future<void> dispatch(NoteAction action);
 

@@ -27,10 +27,7 @@ class _NotesScreenState extends State<NotesScreen> {
     super.dispose();
   }
 
-  void _delete(Note note) {
-    store.dispatch(DeleteNote(note.id));
-    showUndoDelete(context, store, note);
-  }
+  void _delete(Note note) => store.dispatch(DeleteNote(note.id));
 
   void _stopSearching() {
     setState(() {
@@ -65,6 +62,16 @@ class _NotesScreenState extends State<NotesScreen> {
                 onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
               ),
         actions: [
+          ValueListenableBuilder(
+            valueListenable: store.lastDeleted,
+            builder: (context, deleted, _) => deleted == null
+                ? const SizedBox.shrink()
+                : IconButton(
+                    icon: const Icon(Icons.restore_from_trash_outlined),
+                    tooltip: 'Undo delete',
+                    onPressed: () => store.dispatch(SaveNote(deleted)),
+                  ),
+          ),
           if (!_searching)
             IconButton(
               icon: const Icon(Icons.search),
@@ -143,21 +150,6 @@ class _NotesScreenState extends State<NotesScreen> {
       ),
     );
   }
-}
-
-/// Shows a "Note deleted" snackbar whose Undo restores [deleted].
-void showUndoDelete(BuildContext context, NoteStore store, Note deleted) {
-  ScaffoldMessenger.of(context)
-    ..hideCurrentSnackBar()
-    ..showSnackBar(
-      SnackBar(
-        content: const Text('Note deleted'),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: () => store.dispatch(SaveNote(deleted)),
-        ),
-      ),
-    );
 }
 
 /// Hideable side panel listing the topics.

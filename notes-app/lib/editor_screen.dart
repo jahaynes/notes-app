@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'note.dart';
-import 'notes_screen.dart';
 import 'store/note_store.dart';
 
 /// Edits a note, dispatching every change as it happens so that leaving by
@@ -51,9 +50,7 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _delete() {
-    final deleted = widget.store.byId(_note.id);
     widget.store.dispatch(DeleteNote(_note.id));
-    if (deleted != null) showUndoDelete(context, widget.store, deleted);
     context.pop();
   }
 

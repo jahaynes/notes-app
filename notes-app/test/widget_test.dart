@@ -93,10 +93,12 @@ void main() {
     await tester.tap(find.byTooltip('Delete'));
     await tester.pumpAndSettle();
     expect(store.notes.value, isEmpty);
+    expect(find.byType(SnackBar), findsNothing);
 
-    await tester.tap(find.text('Undo'));
+    await tester.tap(find.byTooltip('Undo delete'));
     await tester.pumpAndSettle();
     expect(find.text('Groceries'), findsOneWidget);
+    expect(find.byTooltip('Undo delete'), findsNothing);
   });
 
   testWidgets('show in full removes truncation on the overview', (
