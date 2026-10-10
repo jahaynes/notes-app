@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
+import 'topic.dart';
+
 /// Palette of note background colors. Index 0 means "no color".
 const noteColors = <Color?>[
   null,
@@ -22,11 +24,13 @@ class Note {
     this.body = '',
     this.colorIndex = 0,
     this.showFull = false,
+    this.topicId = Topic.uncategorisedId,
     DateTime? updatedAt,
   }) : updatedAt = updatedAt ?? DateTime.now();
 
-  /// A blank note with a fresh unique id.
-  factory Note.create() => Note(id: _uuid.v4());
+  /// A blank note in [topicId] with a fresh unique id.
+  factory Note.create({String topicId = Topic.uncategorisedId}) =>
+      Note(id: _uuid.v4(), topicId: topicId);
 
   static const _uuid = Uuid();
 
@@ -37,6 +41,9 @@ class Note {
 
   /// Whether the overview card shows the whole note instead of truncating it.
   final bool showFull;
+
+  /// The id of the [Topic] this note belongs to.
+  final String topicId;
   final DateTime updatedAt;
 
   bool get isEmpty => title.trim().isEmpty && body.trim().isEmpty;
@@ -46,6 +53,7 @@ class Note {
     String? body,
     int? colorIndex,
     bool? showFull,
+    String? topicId,
     DateTime? updatedAt,
   }) => Note(
     id: id,
@@ -53,6 +61,7 @@ class Note {
     body: body ?? this.body,
     colorIndex: colorIndex ?? this.colorIndex,
     showFull: showFull ?? this.showFull,
+    topicId: topicId ?? this.topicId,
     updatedAt: updatedAt ?? this.updatedAt,
   );
 
@@ -64,11 +73,12 @@ class Note {
       other.body == body &&
       other.colorIndex == colorIndex &&
       other.showFull == showFull &&
+      other.topicId == topicId &&
       other.updatedAt == updatedAt;
 
   @override
   int get hashCode =>
-      Object.hash(id, title, body, colorIndex, showFull, updatedAt);
+      Object.hash(id, title, body, colorIndex, showFull, topicId, updatedAt);
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -76,6 +86,7 @@ class Note {
     'body': body,
     'colorIndex': colorIndex,
     'showFull': showFull,
+    'topicId': topicId,
     'updatedAt': updatedAt.toIso8601String(),
   };
 
@@ -85,6 +96,7 @@ class Note {
     body: json['body'] as String? ?? '',
     colorIndex: json['colorIndex'] as int? ?? 0,
     showFull: json['showFull'] as bool? ?? false,
+    topicId: json['topicId'] as String? ?? Topic.uncategorisedId,
     updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? ''),
   );
 }

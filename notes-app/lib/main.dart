@@ -34,8 +34,15 @@ class _NoteishAppState extends State<NoteishApp> {
         routes: [
           GoRoute(
             path: 'new',
-            builder: (_, _) =>
-                EditorScreen(store: widget.store, note: Note.create()),
+            builder: (_, state) {
+              final topicId = state.uri.queryParameters['topic'];
+              return EditorScreen(
+                store: widget.store,
+                note: topicId == null
+                    ? Note.create()
+                    : Note.create(topicId: topicId),
+              );
+            },
           ),
           GoRoute(
             path: 'note/:id',

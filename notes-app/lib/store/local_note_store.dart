@@ -36,10 +36,12 @@ class LocalNoteStore extends NoteStore {
     switch (action) {
       case SaveNote(:final note):
         if (note.id == _lastDeleted.value?.id) _lastDeleted.value = null;
+        final topicExists = _topics.value.any((t) => t.id == note.topicId);
         await _setNotes([
           for (final n in _notes.value)
             if (n.id != note.id) n,
-          if (!note.isEmpty) note,
+          if (!note.isEmpty)
+            topicExists ? note : note.copyWith(topicId: Topic.uncategorisedId),
         ]);
       case DeleteNote(:final id):
         final deleted = byId(id);
@@ -52,11 +54,17 @@ class LocalNoteStore extends NoteStore {
       case AddTopic(:final topic):
         await _setTopics([..._topics.value, topic]);
       case DeleteTopic(:final id):
-        if (id == Topic.uncategorised.id) return;
+        if (id == Topic.uncategorisedId) return;
         await _setTopics([
           for (final t in _topics.value)
             if (t.id != id) t,
         ]);
+        if (_notes.value.any((n) => n.topicId == id)) {
+          await _setNotes([
+            for (final n in _notes.value)
+              n.topicId == id ? n.copyWith(topicId: Topic.uncategorisedId) : n,
+          ]);
+        }
     }
   }
 

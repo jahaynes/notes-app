@@ -54,7 +54,8 @@ void main() {
     await tester.tap(find.byTooltip('Show sidebar'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Uncategorised'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, '(All)'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'Uncategorised'), findsOneWidget);
     expect(find.byTooltip('Delete topic'), findsNothing);
 
     await tester.tap(find.text('Add topic'));
@@ -64,13 +65,91 @@ void main() {
     await tester.tap(find.text('Add'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Recipes'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'Recipes'), findsOneWidget);
     expect(store.topics.value.last.name, 'Recipes');
 
     await tester.tap(find.byTooltip('Delete topic'));
     await tester.pumpAndSettle();
     expect(find.text('Recipes'), findsNothing);
     expect(store.topics.value, [Topic.uncategorised]);
+  });
+
+  test('deleting a topic moves its notes to Uncategorised', () async {
+    final store = await _freshStore();
+    final work = Topic.create('Work');
+    await store.dispatch(AddTopic(work));
+    final note = Note.create(topicId: work.id).copyWith(title: 'Report');
+    await store.dispatch(SaveNote(note));
+    await store.dispatch(DeleteNote(note.id));
+
+    await store.dispatch(DeleteTopic(work.id));
+    expect(store.notes.value, isEmpty);
+
+    // Restoring a note whose topic has gone puts it in Uncategorised too.
+    await store.dispatch(SaveNote(store.lastDeleted.value!));
+    expect(store.notes.value.single.topicId, Topic.uncategorisedId);
+
+    final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
+    expect(reloaded.notes.value.single.topicId, Topic.uncategorisedId);
+  });
+
+  testWidgets('topics filter the notes, and new notes join the selected one', (
+    tester,
+  ) async {
+    final store = await _freshStore();
+    final work = Topic.create('Work');
+    await store.dispatch(AddTopic(work));
+    await store.dispatch(SaveNote(Note.create().copyWith(title: 'Loose')));
+    await store.dispatch(
+      SaveNote(Note.create(topicId: work.id).copyWith(title: 'Report')),
+    );
+    await tester.pumpWidget(NoteishApp(store: store));
+
+    // Uncategorised is selected on open.
+    expect(find.text('Loose'), findsOneWidget);
+    expect(find.text('Report'), findsNothing);
+
+    await tester.tap(find.byTooltip('Show sidebar'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ListTile, 'Work'));
+    await tester.pumpAndSettle();
+    expect(find.text('Loose'), findsNothing);
+    expect(find.text('Report'), findsOneWidget);
+
+    await tester.tap(find.text('New note'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'Agenda');
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('Agenda'), findsOneWidget);
+    expect(find.text('Loose'), findsNothing); // Still on Work.
+    expect(store.search('Agenda').single.topicId, work.id);
+
+    await tester.tap(find.widgetWithText(ListTile, '(All)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Loose'), findsOneWidget);
+    expect(find.text('Report'), findsOneWidget);
+    expect(find.text('Agenda'), findsOneWidget);
+  });
+
+  testWidgets('move a note to another topic from the editor', (tester) async {
+    final store = await _freshStore();
+    final work = Topic.create('Work');
+    await store.dispatch(AddTopic(work));
+    await store.dispatch(SaveNote(Note.create().copyWith(title: 'Report')));
+    await tester.pumpWidget(NoteishApp(store: store));
+
+    await tester.tap(find.text('Report'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Topic'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Work'));
+    await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    expect(store.notes.value.single.topicId, work.id);
+    expect(find.text('Report'), findsNothing); // Still viewing Uncategorised.
   });
 
   testWidgets('create, edit, and delete a note with undo', (tester) async {

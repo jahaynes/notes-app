@@ -31,12 +31,13 @@ class _EditorScreenState extends State<EditorScreen> {
     super.dispose();
   }
 
-  void _save({int? colorIndex, bool? showFull}) {
+  void _save({int? colorIndex, bool? showFull, String? topicId}) {
     final next = _note.copyWith(
       title: _title.text,
       body: _body.text,
       colorIndex: colorIndex,
       showFull: showFull,
+      topicId: topicId,
     );
     if (next == _note) return;
     final contentChanged = next.title != _note.title || next.body != _note.body;
@@ -52,6 +53,34 @@ class _EditorScreenState extends State<EditorScreen> {
   void _delete() {
     widget.store.dispatch(DeleteNote(_note.id));
     context.pop();
+  }
+
+  void _pickTopic() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final topic in widget.store.topics.value)
+              ListTile(
+                leading: Icon(
+                  topic.isDefault ? Icons.inbox_outlined : Icons.label_outline,
+                ),
+                title: Text(topic.name),
+                trailing: topic.id == _note.topicId
+                    ? const Icon(Icons.check)
+                    : null,
+                onTap: () {
+                  _save(topicId: topic.id);
+                  Navigator.pop(sheetContext);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _pickColor() {
@@ -112,6 +141,11 @@ class _EditorScreenState extends State<EditorScreen> {
                 ],
               ),
             ),
+          ),
+          IconButton(
+            tooltip: 'Topic',
+            icon: const Icon(Icons.label_outline),
+            onPressed: _pickTopic,
           ),
           IconButton(
             tooltip: 'Color',

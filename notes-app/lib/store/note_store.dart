@@ -8,7 +8,8 @@ sealed class NoteAction {
   const NoteAction();
 }
 
-/// Inserts or replaces [note]. Saving an empty note deletes it instead.
+/// Inserts or replaces [note]. Saving an empty note deletes it instead, and a
+/// note whose topic no longer exists is saved to [Topic.uncategorised].
 final class SaveNote extends NoteAction {
   const SaveNote(this.note);
 
@@ -28,7 +29,8 @@ final class AddTopic extends NoteAction {
   final Topic topic;
 }
 
-/// Removes the topic with [id]. The default topic can't be deleted.
+/// Removes the topic with [id], moving its notes to [Topic.uncategorised].
+/// The default topic can't be deleted.
 final class DeleteTopic extends NoteAction {
   const DeleteTopic(this.id);
 
@@ -55,14 +57,15 @@ abstract class NoteStore {
 
   Note? byId(String id) => notes.value.where((n) => n.id == id).firstOrNull;
 
-  List<Note> search(String query) {
+  /// Notes matching [query], limited to the topic [topicId] if given.
+  List<Note> search(String query, {String? topicId}) {
     final q = query.trim().toLowerCase();
-    if (q.isEmpty) return notes.value;
     return notes.value
         .where(
           (n) =>
-              n.title.toLowerCase().contains(q) ||
-              n.body.toLowerCase().contains(q),
+              (topicId == null || n.topicId == topicId) &&
+              (n.title.toLowerCase().contains(q) ||
+                  n.body.toLowerCase().contains(q)),
         )
         .toList();
   }

@@ -11,16 +11,18 @@ class Topic {
 
   /// The default topic. It always exists and can't be deleted.
   static const uncategorised = Topic(
-    id: 'uncategorised',
+    id: uncategorisedId,
     name: 'Uncategorised',
   );
+
+  static const uncategorisedId = 'uncategorised';
 
   static const _uuid = Uuid();
 
   final String id;
   final String name;
 
-  bool get isDefault => id == uncategorised.id;
+  bool get isDefault => id == uncategorisedId;
 
   @override
   bool operator ==(Object other) =>

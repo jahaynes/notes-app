@@ -19,6 +19,9 @@ class _NotesScreenState extends State<NotesScreen> {
   bool _searching = false;
   bool _sidebarOpen = false;
 
+  /// The topic whose notes are shown, or null to show all notes.
+  String? _topicId = Topic.uncategorisedId;
+
   NoteStore get store => widget.store;
 
   @override
@@ -50,7 +53,19 @@ class _NotesScreenState extends State<NotesScreen> {
                 ),
                 onChanged: (_) => setState(() {}),
               )
-            : const Text('Noteish'),
+            : ValueListenableBuilder(
+                valueListenable: store.topics,
+                builder: (context, topics, _) => Text(
+                  _topicId == null
+                      ? 'All notes'
+                      : topics
+                            .firstWhere(
+                              (t) => t.id == _topicId,
+                              orElse: () => Topic.uncategorised,
+                            )
+                            .name,
+                ),
+              ),
         leading: _searching
             ? IconButton(
                 icon: const Icon(Icons.arrow_back),
@@ -81,18 +96,27 @@ class _NotesScreenState extends State<NotesScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => context.go('/new'),
+        onPressed: () =>
+            context.go(_topicId == null ? '/new' : '/new?topic=$_topicId'),
         icon: const Icon(Icons.edit_outlined),
         label: const Text('New note'),
       ),
       body: Row(
         children: [
-          _Sidebar(store: store, open: _sidebarOpen),
+          _Sidebar(
+            store: store,
+            open: _sidebarOpen,
+            selectedTopicId: _topicId,
+            onSelect: (id) => setState(() => _topicId = id),
+          ),
           Expanded(
             child: ListenableBuilder(
               listenable: store.notes,
               builder: (context, _) {
-                final notes = store.search(_searchController.text);
+                final notes = store.search(
+                  _searchController.text,
+                  topicId: _topicId,
+                );
                 if (notes.isEmpty) {
                   return _EmptyState(
                     searching: _searchController.text.isNotEmpty,
@@ -154,19 +178,37 @@ class _NotesScreenState extends State<NotesScreen> {
 
 /// Hideable side panel listing the topics.
 class _Sidebar extends StatelessWidget {
-  const _Sidebar({required this.store, required this.open});
+  const _Sidebar({
+    required this.store,
+    required this.open,
+    required this.selectedTopicId,
+    required this.onSelect,
+  });
 
   static const _width = 240.0;
 
   final NoteStore store;
   final bool open;
 
+  /// The selected topic's id, or null when "(All)" is selected.
+  final String? selectedTopicId;
+  final ValueChanged<String?> onSelect;
+
+  void _deleteTopic(Topic topic) {
+    store.dispatch(DeleteTopic(topic.id));
+    // Its notes move to Uncategorised, so follow them there.
+    if (topic.id == selectedTopicId) onSelect(Topic.uncategorisedId);
+  }
+
   Future<void> _addTopic(BuildContext context) async {
     final name = await showDialog<String>(
       context: context,
       builder: (_) => const _AddTopicDialog(),
     );
-    if (name != null) store.dispatch(AddTopic(Topic.create(name)));
+    if (name == null) return;
+    final topic = Topic.create(name);
+    store.dispatch(AddTopic(topic));
+    onSelect(topic.id);
   }
 
   @override
@@ -205,32 +247,44 @@ class _Sidebar extends StatelessWidget {
               Expanded(
                 child: ValueListenableBuilder(
                   valueListenable: store.topics,
-                  builder: (context, topics, _) => ListView(
-                    children: [
-                      for (final topic in topics)
+                  builder: (context, topics, _) => ListTileTheme(
+                    selectedColor: scheme.onSecondaryContainer,
+                    selectedTileColor: scheme.secondaryContainer,
+                    child: ListView(
+                      children: [
                         ListTile(
-                          key: ValueKey(topic.id),
                           dense: true,
-                          leading: Icon(
-                            topic.isDefault
-                                ? Icons.inbox_outlined
-                                : Icons.label_outline,
-                          ),
-                          title: Text(
-                            topic.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          trailing: topic.isDefault
-                              ? null
-                              : IconButton(
-                                  icon: const Icon(Icons.close, size: 18),
-                                  tooltip: 'Delete topic',
-                                  onPressed: () =>
-                                      store.dispatch(DeleteTopic(topic.id)),
-                                ),
+                          leading: const Icon(Icons.notes),
+                          title: const Text('(All)'),
+                          selected: selectedTopicId == null,
+                          onTap: () => onSelect(null),
                         ),
-                    ],
+                        for (final topic in topics)
+                          ListTile(
+                            key: ValueKey(topic.id),
+                            dense: true,
+                            selected: topic.id == selectedTopicId,
+                            onTap: () => onSelect(topic.id),
+                            leading: Icon(
+                              topic.isDefault
+                                  ? Icons.inbox_outlined
+                                  : Icons.label_outline,
+                            ),
+                            title: Text(
+                              topic.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: topic.isDefault
+                                ? null
+                                : IconButton(
+                                    icon: const Icon(Icons.close, size: 18),
+                                    tooltip: 'Delete topic',
+                                    onPressed: () => _deleteTopic(topic),
+                                  ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
