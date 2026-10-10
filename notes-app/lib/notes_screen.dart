@@ -32,6 +32,46 @@ class _NotesScreenState extends State<NotesScreen> {
 
   void _delete(Note note) => store.dispatch(DeleteNote(note.id));
 
+  /// The selected topic, or null when showing all notes.
+  Topic? get _selectedTopic => _topicId == null
+      ? null
+      : store.topics.value.firstWhere(
+          (t) => t.id == _topicId,
+          orElse: () => Topic.uncategorised,
+        );
+
+  Future<void> _deleteSelectedTopic() async {
+    final topic = _selectedTopic;
+    if (topic == null || topic.isDefault) return;
+    final count = store.search('', topicId: topic.id).length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete "${topic.name}"?'),
+        content: Text(
+          count == 0
+              ? 'This topic has no notes.'
+              : 'Its ${count == 1 ? 'note' : '$count notes'} will be moved '
+                    'to Uncategorised.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    store.dispatch(DeleteTopic(topic.id));
+    // Its notes move to Uncategorised, so follow them there.
+    setState(() => _topicId = Topic.uncategorisedId);
+  }
+
   void _stopSearching() {
     setState(() {
       _searching = false;
@@ -55,16 +95,8 @@ class _NotesScreenState extends State<NotesScreen> {
               )
             : ValueListenableBuilder(
                 valueListenable: store.topics,
-                builder: (context, topics, _) => Text(
-                  _topicId == null
-                      ? 'All notes'
-                      : topics
-                            .firstWhere(
-                              (t) => t.id == _topicId,
-                              orElse: () => Topic.uncategorised,
-                            )
-                            .name,
-                ),
+                builder: (context, _, _) =>
+                    Text(_selectedTopic?.name ?? 'All notes'),
               ),
         leading: _searching
             ? IconButton(
@@ -92,6 +124,12 @@ class _NotesScreenState extends State<NotesScreen> {
               icon: const Icon(Icons.search),
               tooltip: 'Search',
               onPressed: () => setState(() => _searching = true),
+            ),
+          if (!_searching && !(_selectedTopic?.isDefault ?? true))
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Delete topic',
+              onPressed: _deleteSelectedTopic,
             ),
         ],
       ),
@@ -194,12 +232,6 @@ class _Sidebar extends StatelessWidget {
   final String? selectedTopicId;
   final ValueChanged<String?> onSelect;
 
-  void _deleteTopic(Topic topic) {
-    store.dispatch(DeleteTopic(topic.id));
-    // Its notes move to Uncategorised, so follow them there.
-    if (topic.id == selectedTopicId) onSelect(Topic.uncategorisedId);
-  }
-
   Future<void> _addTopic(BuildContext context) async {
     final name = await showDialog<String>(
       context: context,
@@ -275,13 +307,6 @@ class _Sidebar extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            trailing: topic.isDefault
-                                ? null
-                                : IconButton(
-                                    icon: const Icon(Icons.close, size: 18),
-                                    tooltip: 'Delete topic',
-                                    onPressed: () => _deleteTopic(topic),
-                                  ),
                           ),
                       ],
                     ),

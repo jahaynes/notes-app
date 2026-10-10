@@ -68,10 +68,33 @@ void main() {
     expect(find.widgetWithText(ListTile, 'Recipes'), findsOneWidget);
     expect(store.topics.value.last.name, 'Recipes');
 
+    // The new topic is selected, so it can be deleted from the app bar.
+    await store.dispatch(
+      SaveNote(
+        Note.create(topicId: store.topics.value.last.id)
+            .copyWith(title: 'Pancakes'),
+      ),
+    );
     await tester.tap(find.byTooltip('Delete topic'));
+    await tester.pumpAndSettle();
+    expect(find.text('Its note will be moved to Uncategorised.'), findsOne);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(store.topics.value.length, 2);
+
+    await tester.tap(find.byTooltip('Delete topic'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
     await tester.pumpAndSettle();
     expect(find.text('Recipes'), findsNothing);
     expect(store.topics.value, [Topic.uncategorised]);
+
+    // Now on Uncategorised, with the moved note; it can't be deleted.
+    expect(find.text('Pancakes'), findsOneWidget);
+    expect(find.byTooltip('Delete topic'), findsNothing);
+    await tester.tap(find.widgetWithText(ListTile, '(All)'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Delete topic'), findsNothing);
   });
 
   test('deleting a topic moves its notes to Uncategorised', () async {
