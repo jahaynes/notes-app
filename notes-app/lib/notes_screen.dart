@@ -22,6 +22,11 @@ class _NotesScreenState extends State<NotesScreen> {
   /// The topic whose notes are shown, or null to show all notes.
   String? _topicId = Topic.uncategorisedId;
 
+  /// Ids of the notes ticked for deletion. Non-empty means selection mode.
+  final _selected = <String>{};
+
+  bool get _selecting => _selected.isNotEmpty;
+
   NoteStore get store => widget.store;
 
   @override
@@ -30,7 +35,18 @@ class _NotesScreenState extends State<NotesScreen> {
     super.dispose();
   }
 
-  void _delete(Note note) => store.dispatch(DeleteNote(note.id));
+  void _toggleSelected(Note note) => setState(
+    () => _selected.contains(note.id)
+        ? _selected.remove(note.id)
+        : _selected.add(note.id),
+  );
+
+  void _clearSelection() => setState(_selected.clear);
+
+  void _deleteSelected() {
+    store.dispatch(DeleteNotes(_selected.toList()));
+    _clearSelection();
+  }
 
   /// The selected topic, or null when showing all notes.
   Topic? get _selectedTopic => _topicId == null
@@ -81,137 +97,152 @@ class _NotesScreenState extends State<NotesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: _searching
-            ? TextField(
-                controller: _searchController,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  hintText: 'Search notes',
-                  border: InputBorder.none,
+    // Back leaves selection mode before it leaves the screen.
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _clearSelection();
+      },
+      child: Scaffold(
+        appBar: _selecting ? _selectionAppBar() : _appBar(),
+        floatingActionButton: _selecting
+            ? null
+            : FloatingActionButton.extended(
+                onPressed: () => context.go(
+                  _topicId == null ? '/new' : '/new?topic=$_topicId',
                 ),
-                onChanged: (_) => setState(() {}),
-              )
-            : ValueListenableBuilder(
-                valueListenable: store.topics,
-                builder: (context, _, _) =>
-                    Text(_selectedTopic?.name ?? 'All notes'),
+                icon: const Icon(Icons.edit_outlined),
+                label: const Text('New note'),
               ),
-        leading: _searching
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: _stopSearching,
-              )
-            : IconButton(
-                icon: const Icon(Icons.menu),
-                tooltip: _sidebarOpen ? 'Hide sidebar' : 'Show sidebar',
-                onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
-              ),
-        actions: [
-          ValueListenableBuilder(
-            valueListenable: store.lastDeleted,
-            builder: (context, deleted, _) => deleted == null
-                ? const SizedBox.shrink()
-                : IconButton(
-                    icon: const Icon(Icons.restore_from_trash_outlined),
-                    tooltip: 'Undo delete',
-                    onPressed: () => store.dispatch(SaveNote(deleted)),
-                  ),
-          ),
-          if (!_searching)
-            IconButton(
-              icon: const Icon(Icons.search),
-              tooltip: 'Search',
-              onPressed: () => setState(() => _searching = true),
-            ),
-          if (!_searching && !(_selectedTopic?.isDefault ?? true))
-            IconButton(
-              icon: const Icon(Icons.delete_outline),
-              tooltip: 'Delete topic',
-              onPressed: _deleteSelectedTopic,
-            ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () =>
-            context.go(_topicId == null ? '/new' : '/new?topic=$_topicId'),
-        icon: const Icon(Icons.edit_outlined),
-        label: const Text('New note'),
-      ),
-      body: Row(
-        children: [
-          _Sidebar(
-            store: store,
-            open: _sidebarOpen,
-            selectedTopicId: _topicId,
-            onSelect: (id) => setState(() => _topicId = id),
-          ),
-          Expanded(
-            child: ListenableBuilder(
-              listenable: store.notes,
-              builder: (context, _) {
-                final notes = store.search(
-                  _searchController.text,
-                  topicId: _topicId,
-                );
-                if (notes.isEmpty) {
-                  return _EmptyState(
-                    searching: _searchController.text.isNotEmpty,
-                  );
-                }
-                return LayoutBuilder(
-                  builder: (context, constraints) {
-                    final columns = (constraints.maxWidth / 240).floor().clamp(
-                      1,
-                      5,
-                    );
-                    return SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
-                      child: _Masonry(
-                        columns: columns,
-                        children: [
-                          for (final note in notes)
-                            _NoteCard(
-                              key: ValueKey(note.id),
-                              note: note,
-                              onTap: () => context.go('/note/${note.id}'),
-                              onLongPress: () => _showActions(note),
-                            ),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
+        body: _body(),
       ),
     );
   }
 
-  void _showActions(Note note) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: const Text('Delete'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _delete(note);
-              },
+  AppBar _selectionAppBar() => AppBar(
+    leading: IconButton(
+      icon: const Icon(Icons.close),
+      tooltip: 'Cancel selection',
+      onPressed: _clearSelection,
+    ),
+    title: Text('${_selected.length} selected'),
+    actions: [
+      IconButton(
+        icon: const Icon(Icons.delete_outline),
+        tooltip: 'Delete selected',
+        onPressed: _deleteSelected,
+      ),
+    ],
+  );
+
+  AppBar _appBar() => AppBar(
+    title: _searching
+        ? TextField(
+            controller: _searchController,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText: 'Search notes',
+              border: InputBorder.none,
             ),
-          ],
+            onChanged: (_) => setState(() {}),
+          )
+        : ValueListenableBuilder(
+            valueListenable: store.topics,
+            builder: (context, _, _) =>
+                Text(_selectedTopic?.name ?? 'All notes'),
+          ),
+    leading: _searching
+        ? IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: _stopSearching,
+          )
+        : IconButton(
+            icon: const Icon(Icons.menu),
+            tooltip: _sidebarOpen ? 'Hide sidebar' : 'Show sidebar',
+            onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
+          ),
+    actions: [
+      ValueListenableBuilder(
+        valueListenable: store.lastDeleted,
+        builder: (context, deleted, _) => deleted.isEmpty
+            ? const SizedBox.shrink()
+            : IconButton(
+                icon: const Icon(Icons.restore_from_trash_outlined),
+                tooltip: 'Undo delete',
+                onPressed: () => store.dispatch(const UndoDelete()),
+              ),
+      ),
+      if (!_searching)
+        IconButton(
+          icon: const Icon(Icons.search),
+          tooltip: 'Search',
+          onPressed: () => setState(() => _searching = true),
+        ),
+      if (!_searching && !(_selectedTopic?.isDefault ?? true))
+        IconButton(
+          icon: const Icon(Icons.delete_outline),
+          tooltip: 'Delete topic',
+          onPressed: _deleteSelectedTopic,
+        ),
+    ],
+  );
+
+  Widget _body() => Row(
+    children: [
+      _Sidebar(
+        store: store,
+        open: _sidebarOpen,
+        selectedTopicId: _topicId,
+        onSelect: (id) => setState(() {
+          _topicId = id;
+          // Don't let notes that are no longer shown stay ticked.
+          _selected.clear();
+        }),
+      ),
+      Expanded(
+        child: ListenableBuilder(
+          listenable: store.notes,
+          builder: (context, _) {
+            final notes = store.search(
+              _searchController.text,
+              topicId: _topicId,
+            );
+            if (notes.isEmpty) {
+              return _EmptyState(searching: _searchController.text.isNotEmpty);
+            }
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = (constraints.maxWidth / 240).floor().clamp(
+                  1,
+                  5,
+                );
+                return SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
+                  child: _Masonry(
+                    columns: columns,
+                    children: [
+                      for (final note in notes)
+                        _NoteCard(
+                          key: ValueKey(note.id),
+                          note: note,
+                          selected: _selecting
+                              ? _selected.contains(note.id)
+                              : null,
+                          onTap: _selecting
+                              ? () => _toggleSelected(note)
+                              : () => context.go('/note/${note.id}'),
+                          onLongPress: () => _toggleSelected(note),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
         ),
       ),
-    );
-  }
+    ],
+  );
 }
 
 /// Hideable side panel listing the topics.
@@ -407,11 +438,15 @@ class _NoteCard extends StatelessWidget {
   const _NoteCard({
     super.key,
     required this.note,
+    required this.selected,
     required this.onTap,
     required this.onLongPress,
   });
 
   final Note note;
+
+  /// Whether the card is ticked, or null when not in selection mode.
+  final bool? selected;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
 
@@ -422,46 +457,75 @@ class _NoteCard extends StatelessWidget {
     // Pastel note colors need dark text regardless of app brightness.
     final fg = bg != null ? Colors.black87 : theme.colorScheme.onSurface;
 
+    final selected = this.selected;
+
     return Card(
       color: bg ?? theme.colorScheme.surfaceContainerHigh,
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
+      shape: selected == true
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.colorScheme.primary, width: 3),
+            )
+          : null,
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (note.title.trim().isNotEmpty)
-                Text(
-                  note.title,
-                  maxLines: note.showFull ? null : 2,
-                  overflow: note.showFull ? null : TextOverflow.ellipsis,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: fg,
-                    fontWeight: FontWeight.w600,
+        child: Stack(
+          children: [
+            Padding(
+              // Leave room for the checkbox in selection mode.
+              padding: EdgeInsets.fromLTRB(
+                14,
+                14,
+                selected == null ? 14 : 44,
+                14,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (note.title.trim().isNotEmpty)
+                    Text(
+                      note.title,
+                      maxLines: note.showFull ? null : 2,
+                      overflow: note.showFull ? null : TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: fg,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  if (note.title.trim().isNotEmpty &&
+                      note.body.trim().isNotEmpty)
+                    const SizedBox(height: 6),
+                  if (note.body.trim().isNotEmpty)
+                    Text(
+                      note.body,
+                      maxLines: note.showFull ? null : 8,
+                      overflow: note.showFull ? null : TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(color: fg),
+                    ),
+                  const SizedBox(height: 10),
+                  Text(
+                    _formatDate(note.updatedAt),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: fg.withValues(alpha: 0.6),
+                    ),
                   ),
-                ),
-              if (note.title.trim().isNotEmpty && note.body.trim().isNotEmpty)
-                const SizedBox(height: 6),
-              if (note.body.trim().isNotEmpty)
-                Text(
-                  note.body,
-                  maxLines: note.showFull ? null : 8,
-                  overflow: note.showFull ? null : TextOverflow.ellipsis,
-                  style: theme.textTheme.bodyMedium?.copyWith(color: fg),
-                ),
-              const SizedBox(height: 10),
-              Text(
-                _formatDate(note.updatedAt),
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: fg.withValues(alpha: 0.6),
+                ],
+              ),
+            ),
+            if (selected != null)
+              Positioned(
+                top: 2,
+                right: 2,
+                child: Checkbox(
+                  value: selected,
+                  onChanged: (_) => onTap(),
+                  side: BorderSide(color: fg, width: 2),
                 ),
               ),
-            ],
-          ),
+          ],
         ),
       ),
     );

@@ -16,10 +16,17 @@ final class SaveNote extends NoteAction {
   final Note note;
 }
 
-final class DeleteNote extends NoteAction {
-  const DeleteNote(this.id);
+/// Deletes the notes with [ids], remembering them in [NoteStore.lastDeleted]
+/// in place of whatever was deleted before.
+final class DeleteNotes extends NoteAction {
+  const DeleteNotes(this.ids);
 
-  final String id;
+  final Iterable<String> ids;
+}
+
+/// Restores every note in [NoteStore.lastDeleted].
+final class UndoDelete extends NoteAction {
+  const UndoDelete();
 }
 
 /// Adds [topic] to the end of the topic list.
@@ -48,9 +55,9 @@ abstract class NoteStore {
   /// were added. Published the same way as [notes].
   ValueListenable<List<Topic>> get topics;
 
-  /// The most recently deleted note, so it can be restored by saving it again.
-  /// Cleared once it's restored. Not persisted.
-  ValueListenable<Note?> get lastDeleted;
+  /// The notes removed by the most recent [DeleteNotes], until they're
+  /// restored. Not persisted.
+  ValueListenable<List<Note>> get lastDeleted;
 
   /// Applies [action]. Completes once the change has been persisted.
   Future<void> dispatch(NoteAction action);

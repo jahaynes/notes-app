@@ -51,7 +51,7 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _delete() {
-    widget.store.dispatch(DeleteNote(_note.id));
+    widget.store.dispatch(DeleteNotes([_note.id]));
     context.pop();
   }
 

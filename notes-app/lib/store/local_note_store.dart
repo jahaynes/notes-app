@@ -20,7 +20,7 @@ class LocalNoteStore extends NoteStore {
   final SharedPreferences _prefs;
   final ValueNotifier<List<Note>> _notes;
   final ValueNotifier<List<Topic>> _topics;
-  final _lastDeleted = ValueNotifier<Note?>(null);
+  final _lastDeleted = ValueNotifier<List<Note>>(const []);
 
   @override
   ValueListenable<List<Note>> get notes => _notes;
@@ -29,28 +29,27 @@ class LocalNoteStore extends NoteStore {
   ValueListenable<List<Topic>> get topics => _topics;
 
   @override
-  ValueListenable<Note?> get lastDeleted => _lastDeleted;
+  ValueListenable<List<Note>> get lastDeleted => _lastDeleted;
 
   @override
   Future<void> dispatch(NoteAction action) async {
     switch (action) {
       case SaveNote(:final note):
-        if (note.id == _lastDeleted.value?.id) _lastDeleted.value = null;
-        final topicExists = _topics.value.any((t) => t.id == note.topicId);
+        await _saveNotes([note]);
+      case DeleteNotes(:final ids):
+        final idSet = ids.toSet();
+        final deleted = [
+          for (final n in _notes.value)
+            if (idSet.contains(n.id)) n,
+        ];
+        if (deleted.isEmpty) return;
+        _lastDeleted.value = List.unmodifiable(deleted);
         await _setNotes([
           for (final n in _notes.value)
-            if (n.id != note.id) n,
-          if (!note.isEmpty)
-            topicExists ? note : note.copyWith(topicId: Topic.uncategorisedId),
+            if (!idSet.contains(n.id)) n,
         ]);
-      case DeleteNote(:final id):
-        final deleted = byId(id);
-        if (deleted == null) return;
-        _lastDeleted.value = deleted;
-        await _setNotes([
-          for (final n in _notes.value)
-            if (n.id != id) n,
-        ]);
+      case UndoDelete():
+        await _saveNotes(_lastDeleted.value);
       case AddTopic(:final topic):
         await _setTopics([..._topics.value, topic]);
       case DeleteTopic(:final id):
@@ -66,6 +65,26 @@ class LocalNoteStore extends NoteStore {
           ]);
         }
     }
+  }
+
+  /// Inserts or replaces [notes] as described by [SaveNote].
+  Future<void> _saveNotes(List<Note> notes) async {
+    final ids = {for (final n in notes) n.id};
+    if (_lastDeleted.value.any((n) => ids.contains(n.id))) {
+      _lastDeleted.value = List.unmodifiable(
+        _lastDeleted.value.where((n) => !ids.contains(n.id)),
+      );
+    }
+    final topicIds = {for (final t in _topics.value) t.id};
+    await _setNotes([
+      for (final n in _notes.value)
+        if (!ids.contains(n.id)) n,
+      for (final n in notes)
+        if (!n.isEmpty)
+          topicIds.contains(n.topicId)
+              ? n
+              : n.copyWith(topicId: Topic.uncategorisedId),
+    ]);
   }
 
   Future<void> _setNotes(List<Note> notes) async {

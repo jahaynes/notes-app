@@ -103,13 +103,13 @@ void main() {
     await store.dispatch(AddTopic(work));
     final note = Note.create(topicId: work.id).copyWith(title: 'Report');
     await store.dispatch(SaveNote(note));
-    await store.dispatch(DeleteNote(note.id));
+    await store.dispatch(DeleteNotes([note.id]));
 
     await store.dispatch(DeleteTopic(work.id));
     expect(store.notes.value, isEmpty);
 
     // Restoring a note whose topic has gone puts it in Uncategorised too.
-    await store.dispatch(SaveNote(store.lastDeleted.value!));
+    await store.dispatch(const UndoDelete());
     expect(store.notes.value.single.topicId, Topic.uncategorisedId);
 
     final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
@@ -201,6 +201,50 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Groceries'), findsOneWidget);
     expect(find.byTooltip('Undo delete'), findsNothing);
+  });
+
+  testWidgets('long-press selects several notes to delete, with undo', (
+    tester,
+  ) async {
+    final store = await _freshStore();
+    for (final title in ['One', 'Two', 'Three']) {
+      await store.dispatch(SaveNote(Note.create().copyWith(title: title)));
+    }
+    await tester.pumpWidget(NoteishApp(store: store));
+    expect(find.byType(Checkbox), findsNothing);
+
+    await tester.longPress(find.text('One'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(find.byType(Checkbox), findsNWidgets(3));
+    expect(find.text('New note'), findsNothing);
+
+    // In selection mode a tap ticks rather than opening the note.
+    await tester.tap(find.text('Two'));
+    await tester.tap(find.text('Three'));
+    await tester.pump();
+    await tester.tap(find.text('Three'));
+    await tester.pump();
+    expect(find.text('2 selected'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Delete selected'));
+    await tester.pumpAndSettle();
+    expect(store.notes.value.map((n) => n.title), ['Three']);
+    expect(find.byType(Checkbox), findsNothing);
+    expect(find.text('New note'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Undo delete'));
+    await tester.pumpAndSettle();
+    expect(store.notes.value.length, 3);
+    expect(find.byTooltip('Undo delete'), findsNothing);
+
+    // Back leaves selection mode.
+    await tester.longPress(find.text('One'));
+    await tester.pump();
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(find.byType(Checkbox), findsNothing);
+    expect(store.notes.value.length, 3);
   });
 
   testWidgets('show in full removes truncation on the overview', (
