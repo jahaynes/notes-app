@@ -19,6 +19,9 @@ class _NotesScreenState extends State<NotesScreen> {
   bool _searching = false;
   bool _sidebarOpen = false;
 
+  /// Whether the sidebar was opened just for a drag, to be closed after it.
+  bool _sidebarOpenedForDrag = false;
+
   /// The topic whose notes are shown, or null to show all notes.
   String? _topicId = Topic.uncategorisedId;
 
@@ -36,6 +39,26 @@ class _NotesScreenState extends State<NotesScreen> {
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// A long-press on [note] ticks it and starts dragging every ticked note,
+  /// showing the sidebar so there's somewhere to drop them.
+  void _startDrag(Note note) => setState(() {
+    _selectedTopics.clear();
+    _selectedNotes.add(note.id);
+    if (!_sidebarOpen) _sidebarOpen = _sidebarOpenedForDrag = true;
+  });
+
+  void _endDrag() {
+    if (!_sidebarOpenedForDrag) return;
+    setState(() => _sidebarOpen = _sidebarOpenedForDrag = false);
+  }
+
+  void _moveNotes(Set<String> ids, String topicId) {
+    store.dispatch(MoveNotes(ids, topicId));
+    _clearSelection();
+    // The dragged card may leave the list, which skips its onDragEnd.
+    _endDrag();
   }
 
   void _toggleNote(Note note) => setState(() {
@@ -232,6 +255,7 @@ class _NotesScreenState extends State<NotesScreen> {
         open: _sidebarOpen,
         selectedTopicId: _topicId,
         checkedTopicIds: _selectedTopics,
+        onDropNotes: _moveNotes,
         onToggle: _toggleTopic,
         onSelect: (id) => setState(() {
           _topicId = id;
@@ -263,16 +287,21 @@ class _NotesScreenState extends State<NotesScreen> {
                     columns: columns,
                     children: [
                       for (final note in notes)
-                        _NoteCard(
+                        _DraggableNote(
                           key: ValueKey(note.id),
-                          note: note,
-                          selected: _selectedNotes.isNotEmpty
-                              ? _selectedNotes.contains(note.id)
-                              : null,
-                          onTap: _selectedNotes.isNotEmpty
-                              ? () => _toggleNote(note)
-                              : () => context.go('/note/${note.id}'),
-                          onLongPress: () => _toggleNote(note),
+                          // Dragging carries the ticked notes along with this one.
+                          ids: {..._selectedNotes, note.id},
+                          onDragStarted: () => _startDrag(note),
+                          onDragEnd: _endDrag,
+                          child: _NoteCard(
+                            note: note,
+                            selected: _selectedNotes.isNotEmpty
+                                ? _selectedNotes.contains(note.id)
+                                : null,
+                            onTap: _selectedNotes.isNotEmpty
+                                ? () => _toggleNote(note)
+                                : () => context.go('/note/${note.id}'),
+                          ),
                         ),
                     ],
                   ),
@@ -295,6 +324,7 @@ class _Sidebar extends StatelessWidget {
     required this.onSelect,
     required this.checkedTopicIds,
     required this.onToggle,
+    required this.onDropNotes,
   });
 
   static const _width = 240.0;
@@ -311,6 +341,9 @@ class _Sidebar extends StatelessWidget {
 
   /// Ticks or unticks a topic for deletion.
   final ValueChanged<Topic> onToggle;
+
+  /// Moves notes dropped on a topic into it.
+  final void Function(Set<String> noteIds, String topicId) onDropNotes;
 
   Future<void> _addTopic(BuildContext context) async {
     final name = await showDialog<String>(
@@ -374,33 +407,41 @@ class _Sidebar extends StatelessWidget {
                           onTap: () => onSelect(null),
                         ),
                         for (final topic in topics)
-                          ListTile(
+                          DragTarget<_NoteDrag>(
                             key: ValueKey(topic.id),
-                            dense: true,
-                            selected: topic.id == selectedTopicId,
-                            // The default topic can't be ticked for deletion.
-                            enabled: !(selecting && topic.isDefault),
-                            onTap: selecting
-                                ? () => onToggle(topic)
-                                : () => onSelect(topic.id),
-                            onLongPress: topic.isDefault
-                                ? null
-                                : () => onToggle(topic),
-                            trailing: selecting && !topic.isDefault
-                                ? Checkbox(
-                                    value: checkedTopicIds.contains(topic.id),
-                                    onChanged: (_) => onToggle(topic),
-                                  )
-                                : null,
-                            leading: Icon(
-                              topic.isDefault
-                                  ? Icons.inbox_outlined
-                                  : Icons.label_outline,
-                            ),
-                            title: Text(
-                              topic.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                            onAcceptWithDetails: (details) =>
+                                onDropNotes(details.data.ids, topic.id),
+                            builder: (context, candidates, _) => ListTile(
+                              dense: true,
+                              // Highlight the topic a dragged note is over.
+                              tileColor: candidates.isEmpty
+                                  ? null
+                                  : scheme.primaryContainer,
+                              selected: topic.id == selectedTopicId,
+                              // The default topic can't be ticked for deletion.
+                              enabled: !(selecting && topic.isDefault),
+                              onTap: selecting
+                                  ? () => onToggle(topic)
+                                  : () => onSelect(topic.id),
+                              onLongPress: topic.isDefault
+                                  ? null
+                                  : () => onToggle(topic),
+                              trailing: selecting && !topic.isDefault
+                                  ? Checkbox(
+                                      value: checkedTopicIds.contains(topic.id),
+                                      onChanged: (_) => onToggle(topic),
+                                    )
+                                  : null,
+                              leading: Icon(
+                                topic.isDefault
+                                    ? Icons.inbox_outlined
+                                    : Icons.label_outline,
+                              ),
+                              title: Text(
+                                topic.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                           ),
                       ],
@@ -471,6 +512,64 @@ class _AddTopicDialogState extends State<_AddTopicDialog> {
   }
 }
 
+/// What's carried while dragging notes: the ids of the notes being moved.
+class _NoteDrag {
+  const _NoteDrag(this.ids);
+
+  final Set<String> ids;
+}
+
+/// Lets [child] be dragged after a long-press, so a plain drag still scrolls.
+class _DraggableNote extends StatelessWidget {
+  const _DraggableNote({
+    super.key,
+    required this.ids,
+    required this.onDragStarted,
+    required this.onDragEnd,
+    required this.child,
+  });
+
+  final Set<String> ids;
+  final VoidCallback onDragStarted;
+  final VoidCallback onDragEnd;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final count = ids.length;
+    return LongPressDraggable<_NoteDrag>(
+      data: _NoteDrag(ids),
+      onDragStarted: onDragStarted,
+      onDragEnd: (_) => onDragEnd(),
+      feedback: Material(
+        elevation: 6,
+        color: scheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.drive_file_move_outline,
+                color: scheme.onSecondaryContainer,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                count == 1 ? 'Move note' : 'Move $count notes',
+                style: TextStyle(color: scheme.onSecondaryContainer),
+              ),
+            ],
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(opacity: 0.4, child: child),
+      child: child,
+    );
+  }
+}
+
 /// Distributes children round-robin across [columns] for a staggered look.
 class _Masonry extends StatelessWidget {
   const _Masonry({required this.columns, required this.children});
@@ -500,11 +599,9 @@ class _Masonry extends StatelessWidget {
 
 class _NoteCard extends StatelessWidget {
   const _NoteCard({
-    super.key,
     required this.note,
     required this.selected,
     required this.onTap,
-    required this.onLongPress,
   });
 
   final Note note;
@@ -512,7 +609,6 @@ class _NoteCard extends StatelessWidget {
   /// Whether the card is ticked, or null when not in selection mode.
   final bool? selected;
   final VoidCallback onTap;
-  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -535,7 +631,6 @@ class _NoteCard extends StatelessWidget {
           : null,
       child: InkWell(
         onTap: onTap,
-        onLongPress: onLongPress,
         child: Stack(
           children: [
             Padding(

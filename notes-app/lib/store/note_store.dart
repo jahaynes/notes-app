@@ -24,6 +24,15 @@ final class DeleteNotes extends NoteAction {
   final Iterable<String> ids;
 }
 
+/// Moves the notes with [ids] into the topic [topicId], leaving their
+/// timestamps alone.
+final class MoveNotes extends NoteAction {
+  const MoveNotes(this.ids, this.topicId);
+
+  final Iterable<String> ids;
+  final String topicId;
+}
+
 /// Restores every note in [NoteStore.lastDeleted].
 final class UndoDelete extends NoteAction {
   const UndoDelete();

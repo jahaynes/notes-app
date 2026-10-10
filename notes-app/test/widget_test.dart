@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:noteish/store/local_note_store.dart';
@@ -321,6 +322,56 @@ void main() {
     await tester.pump();
     expect(find.byType(Checkbox), findsNothing);
     expect(store.notes.value.length, 3);
+  });
+
+  testWidgets('long-press and drag notes onto a topic to move them', (
+    tester,
+  ) async {
+    final store = await _freshStore();
+    final work = Topic.create('Work');
+    await store.dispatch(AddTopic(work));
+    for (final title in ['One', 'Two', 'Three']) {
+      await store.dispatch(SaveNote(Note.create().copyWith(title: title)));
+    }
+    final stamps = {for (final n in store.notes.value) n.id: n.updatedAt};
+    await tester.pumpWidget(NoteishApp(store: store));
+
+    Future<void> dragOntoWork(String title) async {
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text(title)),
+      );
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+      await tester.pumpAndSettle(); // The hidden sidebar slides open.
+      await gesture.moveTo(
+        tester.getCenter(find.widgetWithText(ListTile, 'Work')),
+      );
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+    }
+
+    String topicOf(String title) => store.search(title).single.topicId;
+
+    // A single note.
+    await dragOntoWork('One');
+    expect(topicOf('One'), work.id);
+    expect(find.text('One'), findsNothing); // Still viewing Uncategorised.
+    expect(find.byType(Checkbox), findsNothing);
+    expect(find.byTooltip('Show sidebar'), findsOneWidget); // Hidden again.
+
+    // A ticked note comes along with the dragged one.
+    await tester.longPress(find.text('Two'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    await dragOntoWork('Three');
+    expect(topicOf('Two'), work.id);
+    expect(topicOf('Three'), work.id);
+    expect(find.text('No notes yet'), findsOneWidget);
+
+    // Moving isn't an edit.
+    for (final n in store.notes.value) {
+      expect(n.updatedAt, stamps[n.id]);
+    }
   });
 
   testWidgets('show in full removes truncation on the overview', (
