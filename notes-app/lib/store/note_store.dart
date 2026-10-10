@@ -2,22 +2,40 @@ import 'package:flutter/foundation.dart';
 
 import '../note.dart';
 
-/// Source of truth for notes. Listeners are notified after every change.
-abstract class NoteStore extends ChangeNotifier {
-  /// All notes, most recently updated first.
-  List<Note> get notes;
+/// A change the UI asks the store to make.
+sealed class NoteAction {
+  const NoteAction();
+}
 
-  Note? byId(String id);
+/// Inserts or replaces [note]. Saving an empty note deletes it instead.
+final class SaveNote extends NoteAction {
+  const SaveNote(this.note);
 
-  /// Inserts or replaces [note]. Empty notes are discarded instead of saved.
-  void upsert(Note note);
+  final Note note;
+}
 
-  void delete(String id);
+final class DeleteNote extends NoteAction {
+  const DeleteNote(this.id);
+
+  final String id;
+}
+
+/// Source of truth for notes. Actions flow in through [dispatch]; the
+/// resulting state flows out through [notes].
+abstract class NoteStore {
+  /// All notes, most recently updated first. Each change publishes a new,
+  /// unmodifiable list rather than mutating the old one.
+  ValueListenable<List<Note>> get notes;
+
+  /// Applies [action]. Completes once the change has been persisted.
+  Future<void> dispatch(NoteAction action);
+
+  Note? byId(String id) => notes.value.where((n) => n.id == id).firstOrNull;
 
   List<Note> search(String query) {
     final q = query.trim().toLowerCase();
-    if (q.isEmpty) return notes;
-    return notes
+    if (q.isEmpty) return notes.value;
+    return notes.value
         .where(
           (n) =>
               n.title.toLowerCase().contains(q) ||

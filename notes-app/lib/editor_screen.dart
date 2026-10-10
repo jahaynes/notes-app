@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
-
 import 'package:go_router/go_router.dart';
 
 import 'note.dart';
 import 'notes_screen.dart';
 import 'store/note_store.dart';
 
-/// Edits a working copy of a note, saving every change as it happens so that
-/// leaving by any route (app bar, system or browser back) keeps the edits.
+/// Edits a note, dispatching every change as it happens so that leaving by
+/// any route (app bar, system or browser back) keeps the edits.
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key, required this.store, required this.note});
 
@@ -19,22 +18,12 @@ class EditorScreen extends StatefulWidget {
 }
 
 class _EditorScreenState extends State<EditorScreen> {
-  late final Note _draft = widget.note.copy();
-  late final _title = TextEditingController(text: _draft.title)
+  /// The note as last sent to the store.
+  late Note _note = widget.note;
+  late final _title = TextEditingController(text: _note.title)
     ..addListener(_save);
-  late final _body = TextEditingController(text: _draft.body)
+  late final _body = TextEditingController(text: _note.body)
     ..addListener(_save);
-
-  /// The note as last written to the store.
-  late Note _saved = widget.note.copy();
-
-  bool get _contentChanged =>
-      _title.text != _saved.title || _body.text != _saved.body;
-
-  bool get _changed =>
-      _contentChanged ||
-      _draft.colorIndex != _saved.colorIndex ||
-      _draft.showFull != _saved.showFull;
 
   @override
   void dispose() {
@@ -43,25 +32,27 @@ class _EditorScreenState extends State<EditorScreen> {
     super.dispose();
   }
 
-  void _save() {
-    if (!_changed) return;
-    _draft
-      ..title = _title.text
-      ..body = _body.text;
+  void _save({int? colorIndex, bool? showFull}) {
+    final next = _note.copyWith(
+      title: _title.text,
+      body: _body.text,
+      colorIndex: colorIndex,
+      showFull: showFull,
+    );
+    if (next == _note) return;
+    final contentChanged = next.title != _note.title || next.body != _note.body;
     // Only bump the timestamp for content edits, not display tweaks.
-    if (_contentChanged) _draft.updatedAt = DateTime.now();
-    _saved = _draft.copy();
-    widget.store.upsert(_saved.copy());
-  }
-
-  void _update(VoidCallback change) {
-    setState(change);
-    _save();
+    setState(
+      () => _note = contentChanged
+          ? next.copyWith(updatedAt: DateTime.now())
+          : next,
+    );
+    widget.store.dispatch(SaveNote(_note));
   }
 
   void _delete() {
-    final deleted = widget.store.byId(_draft.id);
-    widget.store.delete(_draft.id);
+    final deleted = widget.store.byId(_note.id);
+    widget.store.dispatch(DeleteNote(_note.id));
     if (deleted != null) showUndoDelete(context, widget.store, deleted);
     context.pop();
   }
@@ -80,9 +71,9 @@ class _EditorScreenState extends State<EditorScreen> {
               for (var i = 0; i < noteColors.length; i++)
                 _ColorDot(
                   color: noteColors[i],
-                  selected: _draft.colorIndex == i,
+                  selected: _note.colorIndex == i,
                   onTap: () {
-                    _update(() => _draft.colorIndex = i);
+                    _save(colorIndex: i);
                     Navigator.pop(sheetContext);
                   },
                 ),
@@ -96,7 +87,7 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final bg = noteColors[_draft.colorIndex];
+    final bg = noteColors[_note.colorIndex];
     final fg = bg != null ? Colors.black87 : theme.colorScheme.onSurface;
 
     return Scaffold(
@@ -107,14 +98,14 @@ class _EditorScreenState extends State<EditorScreen> {
         actions: [
           InkWell(
             borderRadius: BorderRadius.circular(20),
-            onTap: () => _update(() => _draft.showFull = !_draft.showFull),
+            onTap: () => _save(showFull: !_note.showFull),
             child: Padding(
               padding: const EdgeInsets.only(right: 8),
               child: Row(
                 children: [
                   Checkbox(
-                    value: _draft.showFull,
-                    onChanged: (v) => _update(() => _draft.showFull = v!),
+                    value: _note.showFull,
+                    onChanged: (v) => _save(showFull: v),
                     side: BorderSide(color: fg, width: 2),
                   ),
                   Text(

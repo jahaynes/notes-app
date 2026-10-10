@@ -16,18 +16,18 @@ Future<NoteStore> _freshStore() async {
 void main() {
   test('store persists, and drops empty notes', () async {
     final store = await _freshStore();
-    final a = Note.create()..title = 'A';
-    final b = Note.create()..title = 'B';
-    store.upsert(a);
-    store.upsert(b);
-    store.upsert(Note.create()); // empty, ignored
+    final a = Note.create().copyWith(title: 'A');
+    final b = Note.create().copyWith(title: 'B');
+    await store.dispatch(SaveNote(a));
+    await store.dispatch(SaveNote(b));
+    await store.dispatch(SaveNote(Note.create())); // empty, ignored
 
-    expect(store.notes.map((n) => n.title), ['B', 'A']);
+    expect(store.notes.value.map((n) => n.title), ['B', 'A']);
     expect(store.search('a').single.title, 'A');
 
     // Reload from the same prefs.
     final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
-    expect(reloaded.notes.length, 2);
+    expect(reloaded.notes.value.length, 2);
   });
 
   testWidgets('create, edit, and delete a note with undo', (tester) async {
@@ -43,13 +43,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Groceries'), findsOneWidget);
-    expect(store.notes.single.body, 'eggs, milk');
+    expect(store.notes.value.single.body, 'eggs, milk');
 
     await tester.tap(find.text('Groceries'));
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Delete'));
     await tester.pumpAndSettle();
-    expect(store.notes, isEmpty);
+    expect(store.notes.value, isEmpty);
 
     await tester.tap(find.text('Undo'));
     await tester.pumpAndSettle();
@@ -61,7 +61,7 @@ void main() {
   ) async {
     final store = await _freshStore();
     final body = List.generate(20, (i) => 'line $i').join('\n');
-    store.upsert(Note.create()..body = body);
+    store.dispatch(SaveNote(Note.create().copyWith(body: body)));
     await tester.pumpWidget(NoteishApp(store: store));
 
     expect(tester.widget<Text>(find.text(body)).maxLines, 8);
@@ -73,11 +73,11 @@ void main() {
     await tester.pageBack();
     await tester.pumpAndSettle();
 
-    expect(store.notes.single.showFull, isTrue);
+    expect(store.notes.value.single.showFull, isTrue);
     expect(tester.widget<Text>(find.text(body)).maxLines, isNull);
 
     final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
-    expect(reloaded.notes.single.showFull, isTrue);
+    expect(reloaded.notes.value.single.showFull, isTrue);
   });
 
   testWidgets('edits survive leaving via a URL change (browser back)', (
@@ -96,6 +96,6 @@ void main() {
 
     expect(find.byType(EditorScreen), findsNothing);
     expect(find.text('Kept'), findsOneWidget);
-    expect(store.notes.single.title, 'Kept');
+    expect(store.notes.value.single.title, 'Kept');
   });
 }

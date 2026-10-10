@@ -27,9 +27,8 @@ class _NotesScreenState extends State<NotesScreen> {
   }
 
   void _delete(Note note) {
-    final backup = note.copy();
-    store.delete(note.id);
-    showUndoDelete(context, store, backup);
+    store.dispatch(DeleteNote(note.id));
+    showUndoDelete(context, store, note);
   }
 
   void _stopSearching() {
@@ -83,7 +82,7 @@ class _NotesScreenState extends State<NotesScreen> {
           _Sidebar(open: _sidebarOpen),
           Expanded(
             child: ListenableBuilder(
-              listenable: store,
+              listenable: store.notes,
               builder: (context, _) {
                 final notes = store.search(_searchController.text);
                 if (notes.isEmpty) {
@@ -154,7 +153,7 @@ void showUndoDelete(BuildContext context, NoteStore store, Note deleted) {
         content: const Text('Note deleted'),
         action: SnackBarAction(
           label: 'Undo',
-          onPressed: () => store.upsert(deleted),
+          onPressed: () => store.dispatch(SaveNote(deleted)),
         ),
       ),
     );

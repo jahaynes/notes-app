@@ -13,6 +13,8 @@ const noteColors = <Color?>[
   Color(0xFFF8BBD0),
 ];
 
+/// An immutable note. Use [copyWith] to derive a changed version.
+@immutable
 class Note {
   Note({
     required this.id,
@@ -29,24 +31,44 @@ class Note {
   static const _uuid = Uuid();
 
   final String id;
-  String title;
-  String body;
-  int colorIndex;
+  final String title;
+  final String body;
+  final int colorIndex;
 
   /// Whether the overview card shows the whole note instead of truncating it.
-  bool showFull;
-  DateTime updatedAt;
+  final bool showFull;
+  final DateTime updatedAt;
 
   bool get isEmpty => title.trim().isEmpty && body.trim().isEmpty;
 
-  Note copy() => Note(
+  Note copyWith({
+    String? title,
+    String? body,
+    int? colorIndex,
+    bool? showFull,
+    DateTime? updatedAt,
+  }) => Note(
     id: id,
-    title: title,
-    body: body,
-    colorIndex: colorIndex,
-    showFull: showFull,
-    updatedAt: updatedAt,
+    title: title ?? this.title,
+    body: body ?? this.body,
+    colorIndex: colorIndex ?? this.colorIndex,
+    showFull: showFull ?? this.showFull,
+    updatedAt: updatedAt ?? this.updatedAt,
   );
+
+  @override
+  bool operator ==(Object other) =>
+      other is Note &&
+      other.id == id &&
+      other.title == title &&
+      other.body == body &&
+      other.colorIndex == colorIndex &&
+      other.showFull == showFull &&
+      other.updatedAt == updatedAt;
+
+  @override
+  int get hashCode =>
+      Object.hash(id, title, body, colorIndex, showFull, updatedAt);
 
   Map<String, dynamic> toJson() => {
     'id': id,
