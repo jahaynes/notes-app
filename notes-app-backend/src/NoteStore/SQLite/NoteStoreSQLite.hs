@@ -32,7 +32,7 @@ runNoteStoreSQLite path (NoteStoreSQLite m) =
 
 create :: Connection -> IO ()
 create conn = withTransaction conn $
-    mapM_ (execute_ conn) [createNote, createNoteTopicIndex, createUserTopic]
+    mapM_ (execute_ conn) [createNote, createNoteTopicIndex, createTopic, createUserTopic]
     where
     createNote = [iii|
         CREATE TABLE IF NOT EXISTS Note (
@@ -49,6 +49,15 @@ create conn = withTransaction conn $
     createNoteTopicIndex = [iii|
         CREATE INDEX IF NOT EXISTS Note_topic_id
             ON Note (topic_id); |]
+
+    createTopic = [iii|
+        CREATE TABLE IF NOT EXISTS Topic (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            description TEXT,
+            clock       TEXT NOT NULL DEFAULT '{}'
+                CHECK (json_valid(clock) AND json_type(clock) = 'object'),
+            updated_at  TEXT NOT NULL); |]
 
     createUserTopic = [iii|
         CREATE TABLE IF NOT EXISTS UserTopic (
