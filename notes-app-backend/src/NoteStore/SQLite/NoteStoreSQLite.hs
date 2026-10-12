@@ -10,10 +10,14 @@ import Types
 import           Control.Exception.Safe     (bracket)
 import           Control.Monad.IO.Class     (MonadIO (liftIO))
 import           Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
-import           Data.Functor               ((<&>))
 import           Data.Maybe                 (listToMaybe)
 import           Data.String.Interpolate    (iii)
+import           Data.Text                  (Text)
+import qualified Data.Text.IO as T
+import           Data.Vector                (Vector)
+import qualified Data.Vector as V
 import           Database.SQLite.Simple
+import           System.IO                  (hPrint, stderr)
 
 newtype NoteStoreSQLite a =
     NoteStoreSQLite (ReaderT Connection IO a)
@@ -26,53 +30,97 @@ runNoteStoreSQLite path (NoteStoreSQLite m) =
         runReaderT m conn
 
 create :: Connection -> IO ()
-create conn = execute_ conn [iii|
-CREATE TABLE IF NOT EXISTS records (
-    id    TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    clock TEXT NOT NULL DEFAULT '{}'
-        CHECK (json_valid(clock) AND json_type(clock) = 'object')
-);
-|]
+create conn = withTransaction conn $
+    mapM_ (execute_ conn) [createNote, createUserNote]
+    where
+    createNote = [iii|
+        CREATE TABLE IF NOT EXISTS Note (
+            id    TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            clock TEXT NOT NULL DEFAULT '{}'
+                CHECK (json_valid(clock) AND json_type(clock) = 'object')); |]
 
-upsert :: Query
-upsert = [iii|
-INSERT INTO records (id, value, clock)
-VALUES (?, ?, ?)
-ON CONFLICT (id) DO UPDATE SET
-    value = excluded.value,
-    clock = excluded.clock
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM json_each(records.clock) AS stored
-    WHERE
-        NOT EXISTS (
-            SELECT 1
-            FROM json_each(excluded.clock) AS incoming
-            WHERE incoming.key = stored.key
-              AND incoming.value >= stored.value
-        )
-); |]
+    createUserNote = [iii|
+        CREATE TABLE IF NOT EXISTS UserNote (
+            user_id TEXT NOT NULL,
+            note_id TEXT NOT NULL REFERENCES Note (id),
+            PRIMARY KEY (user_id, note_id)) WITHOUT ROWID; |]
+
+instance Log NoteStoreSQLite where
+
+    lPutStr :: Text -> NoteStoreSQLite ()
+    lPutStr = liftIO . T.hPutStr stderr
+
+    lPutStrLn :: Text -> NoteStoreSQLite ()
+    lPutStrLn = liftIO . T.hPutStrLn stderr
+
+    lPrint :: Show a => a -> NoteStoreSQLite ()
+    lPrint = liftIO . hPrint stderr
 
 instance NoteStore NoteStoreSQLite where
+
+    notesForUser :: UserId -> NoteStoreSQLite (Vector NoteId)
+    notesForUser uid = NoteStoreSQLite $ do
+        conn <- ask
+        liftIO $
+            V.fromList . map (\(Only (SQLNoteId nid)) -> nid)
+                <$> query conn sqlNotesForUser (Only (SQLUserId uid))
+
+        where
+        sqlNotesForUser :: Query
+        sqlNotesForUser = [iii|
+            SELECT note_id
+            FROM UserNote
+            WHERE user_id = ?; |]
 
     loadNote :: NoteId -> NoteStoreSQLite (Maybe Note)
     loadNote nid = NoteStoreSQLite $ do
         conn <- ask
-        liftIO $ selectNote conn nid
+        liftIO $
+            listToMaybe . map toNote
+                <$> query conn sqlLoadNote (Only (SQLNoteId nid))
 
-    storeNote :: Note -> NoteStoreSQLite Written
-    storeNote (Note nid clock (Content value)) = NoteStoreSQLite $ do
+        where
+        sqlLoadNote :: Query
+        sqlLoadNote = [iii|
+            SELECT value, clock
+            FROM Note
+            WHERE id = ?; |]
+
+        toNote (value, SQLClock clock) = Note nid clock (Content value)
+
+    storeNote :: UserId -> Note -> NoteStoreSQLite Written
+    storeNote uid (Note nid clock (Content value)) = NoteStoreSQLite $ do
         conn <- ask
-        liftIO $ do
-            execute conn upsert (SQLNoteId nid, value, SQLClock clock)
-            changes conn <&> \case
-                0 -> Conflicted
-                _ -> Clean
+        liftIO . withTransaction conn $ do
+            execute conn sqlStoreNote (SQLNoteId nid, value, SQLClock clock)
+            changes conn >>= \case
+                0 -> pure Conflicted
+                _ -> do
+                    execute conn sqlStoreUserNote (SQLUserId uid, SQLNoteId nid)
+                    pure Clean
 
-selectNote :: Connection -> NoteId -> IO (Maybe Note)
-selectNote conn nid =
-    listToMaybe . map toNote
-        <$> query conn "SELECT value, clock FROM records WHERE id = ?" (Only (SQLNoteId nid))
-  where
-    toNote (value, SQLClock clock) = Note nid clock (Content value)
+        where
+        sqlStoreUserNote :: Query
+        sqlStoreUserNote = [iii|
+            INSERT OR IGNORE INTO UserNote (user_id, note_id)
+            VALUES (?, ?); |]
+
+        sqlStoreNote :: Query
+        sqlStoreNote = [iii|
+            INSERT INTO Note (id, value, clock)
+            VALUES (?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                value = excluded.value,
+                clock = excluded.clock
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM json_each(Note.clock) AS stored
+                WHERE
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM json_each(excluded.clock) AS incoming
+                        WHERE incoming.key = stored.key
+                        AND incoming.value >= stored.value
+                    )
+            ); |]

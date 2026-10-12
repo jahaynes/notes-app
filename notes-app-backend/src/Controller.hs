@@ -19,8 +19,8 @@ import Types
 import           Control.Lens                ((&), (.~), (?~))
 import           Control.Monad.IO.Class      (liftIO)
 import           Data.Aeson                  (FromJSON, ToJSON)
-import           Data.OpenApi                (NamedSchema (..), OpenApi, ToSchema (..), description,
-                                              info, title, version)
+import           Data.OpenApi                (NamedSchema (..), OpenApi, ToSchema (..), description, info, title, version)
+import qualified Data.Vector as V
 import           GHC.Generics                (Generic)
 import           Network.Wai.Middleware.Cors (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
 import           Servant
@@ -28,7 +28,8 @@ import           Servant.OpenApi             (toOpenApi)
 import           Servant.Swagger.UI          (SwaggerSchemaUI, swaggerSchemaUIServer)
 
 type NotesAPI =
-    "notes" :> Capture "noteId" NoteId :> (LoadNote :<|> StoreNote)
+         "note" :> Capture "noteId" NoteId :> (LoadNote :<|> StoreNote)
+    :<|> "user" :> Capture "userId" UserId :> "notes" :> NotesForUser
 
 type LoadNote =
     UVerb 'GET '[JSON] '[ WithStatus 200 NoteView
@@ -41,11 +42,13 @@ type StoreNote =
                                , WithStatus 409 NoteView
                                ]
 
+type NotesForUser =
+    Get '[JSON] [NoteView]
+
 type API =
          SwaggerSchemaUI "swagger-ui" "openapi.json"
     :<|> NotesAPI
 
--- | A note as served over the wire.
 data NoteView =
     NoteView { noteId  :: !NoteId
              , clock   :: !VectorClock
@@ -56,8 +59,6 @@ instance ToJSON   NoteView
 instance FromJSON NoteView
 instance ToSchema NoteView
 
--- | A write to a note; the note id comes from the path.
--- Omitting the clock starts a fresh one for this user/device.
 data StoreRequest =
     StoreRequest { userId   :: !UserId
                  , deviceId :: !DeviceId
@@ -69,8 +70,7 @@ instance ToJSON   StoreRequest
 instance FromJSON StoreRequest
 instance ToSchema StoreRequest
 
--- | servant-openapi3 documents each 'UVerb' alternative's body via 'ToSchema',
--- but ships no instance for the empty body.
+-- TO fix - orphan instance
 instance ToSchema NoContent where
     declareNamedSchema _ = pure (NamedSchema Nothing mempty)
 
@@ -78,15 +78,16 @@ toView :: Note -> NoteView
 toView (Note nid vc c) = NoteView nid vc c
 
 -- | The whole application, run against any 'NoteStore' that can be run in 'IO'.
-app :: NoteStore m => (forall a. m a -> IO a) -> Application
+app :: (NoteStore m, Log m) => (forall a. m a -> IO a) -> Application
 app runStore =
-    cors (const (Just permissiveCors)) $
+    cors (const (Just localCors)) $
         serve (Proxy @API) $
                  swaggerSchemaUIServer notesOpenApi
             :<|> hoistServer (Proxy @NotesAPI) (liftIO . runStore) notesServer
 
-notesServer :: NoteStore m => ServerT NotesAPI m
-notesServer nid = loadHandler nid :<|> storeHandler nid
+notesServer :: (NoteStore m, Log m) => ServerT NotesAPI m
+notesServer = (\nid -> loadHandler nid :<|> storeHandler nid)
+    :<|> notesForUserHandler
 
 loadHandler :: NoteStore m => NoteId -> ServerT LoadNote m
 loadHandler nid =
@@ -100,6 +101,9 @@ storeHandler nid (StoreRequest uid did mVc c) =
         Nothing   -> respond (WithStatus @204 NoContent)
         Just note -> respond (WithStatus @409 (toView note))
 
+notesForUserHandler :: (NoteStore m, Log m) => UserId -> ServerT NotesForUser m
+notesForUserHandler uid = map toView . V.toList <$> notesFor uid
+
 notesOpenApi :: OpenApi
 notesOpenApi =
     toOpenApi (Proxy @NotesAPI)
@@ -108,12 +112,10 @@ notesOpenApi =
         & info . description ?~ "PUT returns 204 on a clean write, \
                                 \or 409 with the stored note on a vector clock conflict."
 
--- | Anything goes: any origin, the usual methods and headers.
--- For local testing only.
-permissiveCors :: CorsResourcePolicy
-permissiveCors =
+localCors :: CorsResourcePolicy
+localCors =
     simpleCorsResourcePolicy
-        { corsOrigins        = Nothing
+        { corsOrigins        = Just (["http://127.0.0.1:3000"], False)
         , corsMethods        = ["GET", "PUT", "POST", "DELETE", "OPTIONS"]
         , corsRequestHeaders = ["Content-Type", "Authorization", "Accept"]
         }

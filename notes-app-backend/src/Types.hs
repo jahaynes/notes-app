@@ -1,4 +1,13 @@
-module Types where
+module Types ( Content (..)
+             , DeviceId (..)
+             , Newer (..)
+             , Note (..)
+             , NoteId (..)
+             , UserDevice (..)
+             , UserId (..)
+             , VectorClock (..)
+             , Written (..)
+             ) where
 
 import           Control.Lens         ((&), (?~))
 import           Data.Aeson           (FromJSON (..), FromJSONKey (..), FromJSONKeyFunction (..),
@@ -15,7 +24,7 @@ import           Web.HttpApiData      (FromHttpApiData)
 
 newtype UserId
     = UserId UUID
-        deriving (Eq, Ord, Show, ToJSON, FromJSON, ToSchema)
+        deriving (Eq, Ord, Show, ToJSON, FromJSON, ToSchema, FromHttpApiData, ToParamSchema)
 
 newtype DeviceId
     = DeviceId UUID

@@ -2,16 +2,21 @@ module NoteStore.Class where
 
 import Types
 
+import Data.Text   (Text)
+import Data.Vector (Vector)
+
 class Monad m => NoteStore m where
+
+    notesForUser :: UserId -> m (Vector NoteId)
 
     loadNote :: NoteId -> m (Maybe Note)
 
-    storeNote :: Note -> m Written
+    storeNote :: UserId -> Note -> m Written
 
 class Log m where
 
-    lPutStr :: s -> m ()
+    lPutStr :: Text -> m ()
 
-    lPutStrLn :: s -> m ()
+    lPutStrLn :: Text -> m ()
 
-    lPrint :: a -> m ()
+    lPrint :: Show a => a -> m ()

@@ -3,6 +3,7 @@ module Main ( main ) where
 import qualified Data.Map.Strict as M
 import           Data.Text       (Text)
 import qualified Data.UUID       as UUID
+import qualified Data.Vector     as V
 import           Data.Word       (Word32)
 import           Test.Hspec
 
@@ -57,6 +58,24 @@ notesAppSpec = describe "NotesApp" $ do
                    pure (r, n))
             `shouldBe` (Just stored, Just stored)
 
+    it "lists the notes each user has written" $
+        run (do _ <- store aliceU aliceD noteA Nothing (Content "a")
+                _ <- store aliceU aliceD noteB Nothing (Content "b")
+                _ <- store bobU bobD noteB (Just (clock [(alice, 0), (bob, 0)])) (Content "b2")
+                (,) <$> notesList aliceU <*> notesList bobU)
+            `shouldBe`
+                ( [ note noteA [(alice, 0)] "a"
+                  , note noteB [(alice, 0), (bob, 0)] "b2"
+                  ]
+                , [ note noteB [(alice, 0), (bob, 0)] "b2" ]
+                )
+
+    it "does not list a note for a user whose write conflicted" $
+        run (do _ <- store aliceU aliceD noteA Nothing (Content "alice's")
+                _ <- store bobU bobD noteA Nothing (Content "bob's")
+                notesList bobU)
+            `shouldBe` []
+
 noteStorePureSpec :: Spec
 noteStorePureSpec = describe "NoteStorePure" $ do
 
@@ -64,42 +83,42 @@ noteStorePureSpec = describe "NoteStorePure" $ do
         run (loadNote noteA) `shouldBe` Nothing
 
     it "stores a new note cleanly and loads it back" $
-        run (do w <- storeNote (note noteA [(alice, 1)] "hi")
+        run (do w <- storeNote aliceU (note noteA [(alice, 1)] "hi")
                 n <- loadNote noteA
                 pure (w, n))
             `shouldBe` (Clean, Just (note noteA [(alice, 1)] "hi"))
 
     it "accepts a write whose clock dominates the stored one" $
-        run (do _ <- storeNote (note noteA [(alice, 1)] "v1")
-                w <- storeNote (note noteA [(alice, 1), (bob, 1)] "v2")
+        run (do _ <- storeNote aliceU (note noteA [(alice, 1)] "v1")
+                w <- storeNote aliceU (note noteA [(alice, 1), (bob, 1)] "v2")
                 n <- loadNote noteA
                 pure (w, n))
             `shouldBe` (Clean, Just (note noteA [(alice, 1), (bob, 1)] "v2"))
 
     it "accepts a write with an identical clock" $
-        run (do _ <- storeNote (note noteA [(alice, 1)] "v1")
-                storeNote (note noteA [(alice, 1)] "v1 again"))
+        run (do _ <- storeNote aliceU (note noteA [(alice, 1)] "v1")
+                storeNote aliceU (note noteA [(alice, 1)] "v1 again"))
             `shouldBe` Clean
 
     it "rejects a write missing a key from the stored clock" $
         let stored = note noteA [(alice, 1), (bob, 1)] "both"
-        in run (do _ <- storeNote stored
-                   w <- storeNote (note noteA [(alice, 2)] "alice only")
+        in run (do _ <- storeNote aliceU stored
+                   w <- storeNote aliceU (note noteA [(alice, 2)] "alice only")
                    n <- loadNote noteA
                    pure (w, n))
             `shouldBe` (Conflicted, Just stored)
 
     it "rejects a write with a lower counter than the stored clock" $
         let stored = note noteA [(alice, 2)] "v2"
-        in run (do _ <- storeNote stored
-                   w <- storeNote (note noteA [(alice, 1)] "stale")
+        in run (do _ <- storeNote aliceU stored
+                   w <- storeNote aliceU (note noteA [(alice, 1)] "stale")
                    n <- loadNote noteA
                    pure (w, n))
             `shouldBe` (Conflicted, Just stored)
 
     it "keeps different notes independent" $
-        run (do _ <- storeNote (note noteA [(alice, 5)] "a")
-                w <- storeNote (note noteB [(alice, 1)] "b")
+        run (do _ <- storeNote aliceU (note noteA [(alice, 5)] "a")
+                w <- storeNote aliceU (note noteB [(alice, 1)] "b")
                 ns <- traverse loadNote [noteA, noteB]
                 pure (w, ns))
             `shouldBe`
@@ -110,7 +129,10 @@ noteStorePureSpec = describe "NoteStorePure" $ do
                 )
 
 run :: NoteStorePure a -> a
-run m = runNoteStorePure m M.empty
+run m = runNoteStorePure m emptyStore
+
+notesList :: UserId -> NoteStorePure [Note]
+notesList = fmap V.toList . notesFor
 
 note :: NoteId -> [(UserDevice, Int)] -> Text -> Note
 note nid entries content = Note nid (clock entries) (Content content)
