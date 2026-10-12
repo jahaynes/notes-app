@@ -1,25 +1,29 @@
 module Types where
 
+import           Control.Lens         ((&), (?~))
 import           Data.Aeson           (FromJSON (..), FromJSONKey (..), FromJSONKeyFunction (..),
                                        ToJSON (..), ToJSONKey (..), Value (String), withText)
 import           Data.Aeson.Types     (Parser, toJSONKeyText)
 import           Data.Map.Strict      (Map)
 import qualified Data.Map.Strict as M
+import           Data.OpenApi         (NamedSchema (..), OpenApiType (OpenApiString),
+                                       ToParamSchema, ToSchema (..), description, type_)
 import           Data.Text            (Text)
 import qualified Data.Text       as T
 import           Data.UUID            (UUID, fromText, toText)
+import           Web.HttpApiData      (FromHttpApiData)
 
 newtype UserId
     = UserId UUID
-        deriving (Eq, Ord, Show)
+        deriving (Eq, Ord, Show, ToJSON, FromJSON, ToSchema)
 
 newtype DeviceId
     = DeviceId UUID
-        deriving (Eq, Ord, Show)
+        deriving (Eq, Ord, Show, ToJSON, FromJSON, ToSchema)
 
 newtype NoteId
     = NoteId UUID
-        deriving (Eq, Ord, Show)
+        deriving (Eq, Ord, Show, ToJSON, FromJSON, ToSchema, FromHttpApiData, ToParamSchema)
 
 data UserDevice
     = UserDevice !UserId !DeviceId
@@ -36,6 +40,11 @@ instance ToJSONKey UserDevice where
 
 instance FromJSONKey UserDevice where
     fromJSONKey = FromJSONKeyTextParser parseUserDevice
+
+instance ToSchema UserDevice where
+    declareNamedSchema _ = pure . NamedSchema (Just "UserDevice") $ mempty
+        & type_       ?~ OpenApiString
+        & description ?~ "<userId>:<deviceId>"
 
 userDeviceText :: UserDevice -> Text
 userDeviceText (UserDevice (UserId u) (DeviceId d)) =
@@ -54,7 +63,7 @@ data Note
 
 newtype VectorClock =
     VectorClock (Map UserDevice Int)
-        deriving (Eq, ToJSON, FromJSON, Show)
+        deriving (Eq, ToJSON, FromJSON, ToSchema, Show)
 
 class Newer a where
     isNewerThan :: a -> a -> Bool
@@ -69,7 +78,7 @@ instance Newer VectorClock where
 
 newtype Content
     = Content Text
-        deriving (Eq, Show)
+        deriving (Eq, Show, ToJSON, FromJSON, ToSchema)
 
 data Written
     = Clean

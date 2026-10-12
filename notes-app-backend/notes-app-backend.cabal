@@ -22,17 +22,28 @@ common common
         base,
         bytestring,
         containers,
+        http-api-data,
+        lens,
+        openapi3,
         safe-exceptions,
+        servant,
+        servant-openapi3,
+        servant-server,
+        servant-swagger-ui,
         sqlite-simple,
         string-interpolate,
         text,
         transformers,
         uuid,
-        vector
+        vector,
+        wai,
+        wai-cors,
+        warp
 
 library
     import:           common
-    exposed-modules:  NotesApp
+    exposed-modules:  Controller
+                      NotesApp
                       NoteStore.Class
                       NoteStore.SQLite.NoteStoreSQLite
                       NoteStore.SQLite.SQLiteTypes 
@@ -43,6 +54,7 @@ library
 executable notes-app-backend
     import:           common
     main-is:          Main.hs
+    ghc-options:      -threaded -rtsopts "-with-rtsopts=-N"
     build-depends:
         base,
         notes-app-backend
