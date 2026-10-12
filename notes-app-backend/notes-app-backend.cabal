@@ -15,11 +15,16 @@ common common
         InstanceSigs
         LambdaCase
         OverloadedStrings
+        QuasiQuotes
         ScopedTypeVariables
     build-depends:
+        aeson,
         base,
         bytestring,
         containers,
+        safe-exceptions,
+        sqlite-simple,
+        string-interpolate,
         text,
         transformers,
         uuid,
@@ -27,9 +32,9 @@ common common
 
 library
     import:           common
-    exposed-modules:  MyLib
+    exposed-modules:  NotesApp
                       NoteStore.Class
-                      NoteStoreIO
+                      NoteStore.SQLite.NoteStoreSQLite
                       Types
     hs-source-dirs:   src
     default-language: Haskell2010
@@ -52,4 +57,5 @@ test-suite notes-app-backend-test
     other-modules:    NoteStorePure
     build-depends:
         base,
+        hspec,
         notes-app-backend

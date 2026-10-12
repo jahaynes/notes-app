@@ -1,39 +1,35 @@
-module NoteStorePure where
+module NoteStorePure (NoteStorePure, runNoteStorePure) where
 
-import           Control.Monad.Trans.State.Strict (State, get, gets, modify', runState)
-import           Data.Functor                     ((<&>))
+import           Control.Monad.Trans.State.Strict (State, evalState, gets, modify')
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict as M
 
 import NoteStore.Class
 import Types
 
-data StoredNote
-    = StoredNote !UserDevice !Note
-
-type Store = Map NoteId StoredNote
+type Store = Map NoteId Note
 
 newtype NoteStorePure a =
     NoteStorePure (State Store a)
         deriving (Functor, Applicative, Monad)
 
-runNoteStorePure :: NoteStorePure a -> Store -> (a, Store)
-runNoteStorePure (NoteStorePure m) = runState m
+runNoteStorePure :: NoteStorePure a -> Store -> a
+runNoteStorePure (NoteStorePure m) = evalState m
 
 instance NoteStore NoteStorePure where
 
     loadNote :: NoteId -> NoteStorePure (Maybe Note)
-    loadNote nid = NoteStorePure $
-        get <&> \store ->
-            M.lookup nid store <&> \(StoredNote _ n) ->
-                n
+    loadNote nid = NoteStorePure $ gets (M.lookup nid)
 
-    storeNote :: UserDevice -> Note -> NoteStorePure Written
-    storeNote ud note@(Note nid _) = NoteStorePure $ do
-        prev <- gets (M.lookup nid)
-        modify' (M.insert nid (StoredNote ud note))
-        pure $ case prev of
-            Just (StoredNote prevUd prevNote)
-                | prevUd /= ud -> Conflicted prevNote
-            _ -> Clean
+    storeNote :: Note -> NoteStorePure Written
+    storeNote note@(Note nid _ _) = NoteStorePure $
+
+        gets (M.lookup nid) >>= \case
+
+            Just storedNote
+                | not (note `isNewerThan` storedNote) -> pure Conflicted
+    
+            _ -> do
+                modify' (M.insert nid note)
+                pure Clean
 
