@@ -103,7 +103,7 @@ newtype ColorIndex
 
 newtype TopicId
     = TopicId Text
-        deriving (Eq, Show, ToJSON, FromJSON, ToSchema)
+        deriving (Eq, Ord, Show, ToJSON, FromJSON, ToSchema, FromHttpApiData, ToParamSchema)
 
 data Written
     = Clean

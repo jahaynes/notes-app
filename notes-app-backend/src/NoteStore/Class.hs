@@ -8,7 +8,9 @@ import Data.Vector (Vector)
 
 class Monad m => NoteStore m where
 
-    notesForUser :: UserId -> m (Vector NoteId)
+    topicsForUser :: UserId -> m (Vector TopicId)
+
+    notesForTopic :: TopicId -> m (Vector Note)
 
     loadNote :: NoteId -> m (Maybe Note)
 

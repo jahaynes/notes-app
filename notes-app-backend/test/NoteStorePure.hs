@@ -6,14 +6,15 @@ import qualified Data.Map.Strict as M
 import           Data.Set                         (Set)
 import qualified Data.Set        as S
 import           Data.Time                        (UTCTime (..), fromGregorian)
+import           Data.Vector (Vector)
 import qualified Data.Vector     as V
 
 import NoteStore.Class
 import Types
 
 data Store =
-    Store { notes     :: !(Map NoteId Note)
-          , userNotes :: !(Map UserId (Set NoteId))
+    Store { notes      :: !(Map NoteId Note)
+          , userTopics :: !(Map UserId (Set TopicId))
           }
 
 emptyStore :: Store
@@ -41,15 +42,20 @@ instance Log NoteStorePure where
 
 instance NoteStore NoteStorePure where
 
-    notesForUser :: UserId -> NoteStorePure (V.Vector NoteId)
-    notesForUser uid = NoteStorePure $
-        gets (V.fromList . maybe [] S.toAscList . M.lookup uid . userNotes)
+    topicsForUser :: UserId -> NoteStorePure (Vector TopicId)
+    topicsForUser uid = NoteStorePure $
+        gets (V.fromList . maybe [] S.toAscList . M.lookup uid . userTopics)
+
+    notesForTopic :: TopicId -> NoteStorePure (Vector Note)
+    notesForTopic tid = NoteStorePure $
+        gets (V.fromList . filter (\(Note _ _ _ _ _ _ t _) -> t == tid)
+                         . M.elems . notes)
 
     loadNote :: NoteId -> NoteStorePure (Maybe Note)
     loadNote nid = NoteStorePure $ gets (M.lookup nid . notes)
 
     storeNote :: UserId -> Note -> NoteStorePure Written
-    storeNote uid note@(Note nid _ _ _ _ _ _ _) = NoteStorePure $
+    storeNote uid note@(Note nid _ _ _ _ _ tid _) = NoteStorePure $
 
         gets (M.lookup nid . notes) >>= \case
 
@@ -57,7 +63,7 @@ instance NoteStore NoteStorePure where
                 | not (note `isNewerThan` storedNote) -> pure Conflicted
 
             _ -> do
-                modify' $ \(Store ns uns) ->
+                modify' $ \(Store ns uts) ->
                     Store (M.insert nid note ns)
-                          (M.insertWith S.union uid (S.singleton nid) uns)
+                          (M.insertWith S.union uid (S.singleton tid) uts)
                 pure Clean

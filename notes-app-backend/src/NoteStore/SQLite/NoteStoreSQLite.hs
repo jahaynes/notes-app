@@ -32,7 +32,7 @@ runNoteStoreSQLite path (NoteStoreSQLite m) =
 
 create :: Connection -> IO ()
 create conn = withTransaction conn $
-    mapM_ (execute_ conn) [createNote, createUserNote]
+    mapM_ (execute_ conn) [createNote, createNoteTopicIndex, createUserTopic]
     where
     createNote = [iii|
         CREATE TABLE IF NOT EXISTS Note (
@@ -46,11 +46,20 @@ create conn = withTransaction conn $
             topic_id    TEXT NOT NULL,
             updated_at  TEXT NOT NULL); |]
 
-    createUserNote = [iii|
-        CREATE TABLE IF NOT EXISTS UserNote (
-            user_id TEXT NOT NULL,
-            note_id TEXT NOT NULL REFERENCES Note (id),
-            PRIMARY KEY (user_id, note_id)) WITHOUT ROWID; |]
+    createNoteTopicIndex = [iii|
+        CREATE INDEX IF NOT EXISTS Note_topic_id
+            ON Note (topic_id); |]
+
+    createUserTopic = [iii|
+        CREATE TABLE IF NOT EXISTS UserTopic (
+            user_id  TEXT NOT NULL,
+            topic_id TEXT NOT NULL,
+            PRIMARY KEY (user_id, topic_id)) WITHOUT ROWID; |]
+
+toNote :: (SQLNoteId, Text, SQLClock, Text, Int, Bool, Text, UTCTime) -> Note
+toNote (SQLNoteId nid, value, SQLClock clock, title, colorIndex, showFull, topicId, updatedAt) =
+    Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
+         showFull (TopicId topicId) updatedAt
 
 instance Log NoteStoreSQLite where
 
@@ -70,19 +79,35 @@ instance Clock NoteStoreSQLite where
 
 instance NoteStore NoteStoreSQLite where
 
-    notesForUser :: UserId -> NoteStoreSQLite (Vector NoteId)
-    notesForUser uid = NoteStoreSQLite $ do
+    topicsForUser :: UserId -> NoteStoreSQLite (Vector TopicId)
+    topicsForUser uid = NoteStoreSQLite $ do
         conn <- ask
         liftIO $
-            V.fromList . map (\(Only (SQLNoteId nid)) -> nid)
-                <$> query conn sqlNotesForUser (Only (SQLUserId uid))
+            V.fromList . map (\(Only tid) -> TopicId tid)
+                <$> query conn sqlTopicsForUser (Only (SQLUserId uid))
 
         where
-        sqlNotesForUser :: Query
-        sqlNotesForUser = [iii|
-            SELECT note_id
-            FROM UserNote
-            WHERE user_id = ?; |]
+        sqlTopicsForUser :: Query
+        sqlTopicsForUser = [iii|
+            SELECT topic_id
+            FROM UserTopic
+            WHERE user_id = ?
+            ORDER BY topic_id; |]
+
+    notesForTopic :: TopicId -> NoteStoreSQLite (Vector Note)
+    notesForTopic (TopicId tid) = NoteStoreSQLite $ do
+        conn <- ask
+        liftIO $
+            V.fromList . map toNote
+                <$> query conn sqlNotesForTopic (Only tid)
+
+        where
+        sqlNotesForTopic :: Query
+        sqlNotesForTopic = [iii|
+            SELECT id, value, clock, title, color_index, show_full, topic_id, updated_at
+            FROM Note
+            WHERE topic_id = ?
+            ORDER BY id; |]
 
     loadNote :: NoteId -> NoteStoreSQLite (Maybe Note)
     loadNote nid = NoteStoreSQLite $ do
@@ -94,13 +119,9 @@ instance NoteStore NoteStoreSQLite where
         where
         sqlLoadNote :: Query
         sqlLoadNote = [iii|
-            SELECT value, clock, title, color_index, show_full, topic_id, updated_at
+            SELECT id, value, clock, title, color_index, show_full, topic_id, updated_at
             FROM Note
             WHERE id = ?; |]
-
-        toNote (value, SQLClock clock, title, colorIndex, showFull, topicId, updatedAt) =
-            Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
-                 showFull (TopicId topicId) updatedAt
 
     storeNote :: UserId -> Note -> NoteStoreSQLite Written
     storeNote uid (Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
@@ -112,13 +133,13 @@ instance NoteStore NoteStoreSQLite where
             changes conn >>= \case
                 0 -> pure Conflicted
                 _ -> do
-                    execute conn sqlStoreUserNote (SQLUserId uid, SQLNoteId nid)
+                    execute conn sqlStoreUserTopic (SQLUserId uid, topicId)
                     pure Clean
 
         where
-        sqlStoreUserNote :: Query
-        sqlStoreUserNote = [iii|
-            INSERT OR IGNORE INTO UserNote (user_id, note_id)
+        sqlStoreUserTopic :: Query
+        sqlStoreUserTopic = [iii|
+            INSERT OR IGNORE INTO UserTopic (user_id, topic_id)
             VALUES (?, ?); |]
 
         sqlStoreNote :: Query

@@ -8,30 +8,15 @@ import Types
 import           Data.Maybe           (fromMaybe)
 import           NoteStore.Class
 import qualified Data.Map.Strict as M
-import           Data.String.Interpolate (i)
 import           Data.Vector          (Vector)
-import qualified Data.Vector     as V
 
 load :: NoteStore m
      => NoteId -> m (Maybe Note)
 load = loadNote
 
-notesFor :: (NoteStore m, Log m)
-         => UserId -> m (Vector Note)
-notesFor userId = do
-
-    noteIds <- notesForUser userId
-
-    notes <- V.mapM loadNote noteIds
-
-    let (present, missing) =
-            V.partitionWith (\(nid, mNote) -> maybe (Right nid) Left mNote)
-                            (V.zip noteIds notes)
-
-    V.forM_ missing $ \nid ->
-        lPutStrLn [i|WARNING: #{userId} is linked to missing #{nid}|]
-
-    pure present
+notesFor :: NoteStore m
+         => TopicId -> m (Vector Note)
+notesFor = notesForTopic
 
 store :: (NoteStore m, Clock m)
       => UserId -> DeviceId -> NoteId -> Maybe VectorClock

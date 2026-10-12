@@ -31,7 +31,7 @@ import           Servant.Swagger.UI          (SwaggerSchemaUI, swaggerSchemaUISe
 
 type NotesAPI =
          "note" :> Capture "noteId" NoteId :> (LoadNote :<|> StoreNote)
-    :<|> "user" :> Capture "userId" UserId :> "notes" :> NotesForUser
+    :<|> "topic" :> Capture "topicId" TopicId :> "notes" :> NotesForTopic
 
 type LoadNote =
     UVerb 'GET '[JSON] '[ WithStatus 200 NoteView
@@ -44,7 +44,7 @@ type StoreNote =
                                , WithStatus 409 NoteView
                                ]
 
-type NotesForUser =
+type NotesForTopic =
     Get '[JSON] [NoteView]
 
 type API =
@@ -98,7 +98,7 @@ app runStore =
 
 notesServer :: (NoteStore m, Log m, Clock m) => ServerT NotesAPI m
 notesServer = (\nid -> loadHandler nid :<|> storeHandler nid)
-    :<|> notesForUserHandler
+    :<|> notesForTopicHandler
 
 loadHandler :: NoteStore m => NoteId -> ServerT LoadNote m
 loadHandler nid =
@@ -112,8 +112,8 @@ storeHandler nid (StoreRequest uid did mVc t c ci sf tid) =
         Nothing   -> respond (WithStatus @204 NoContent)
         Just note -> respond (WithStatus @409 (toView note))
 
-notesForUserHandler :: (NoteStore m, Log m) => UserId -> ServerT NotesForUser m
-notesForUserHandler uid = map toView . V.toList <$> notesFor uid
+notesForTopicHandler :: NoteStore m => TopicId -> ServerT NotesForTopic m
+notesForTopicHandler tid = map toView . V.toList <$> notesFor tid
 
 notesOpenApi :: OpenApi
 notesOpenApi =
