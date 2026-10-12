@@ -100,6 +100,21 @@ notesAppSpec = describe "NotesApp" $ do
                 (,) <$> topicsList aliceU <*> notesList topicX)
             `shouldBe` ([topicX], [ noteIn topicX noteA [(alice, 0)] "a" ])
 
+    it "creates a topic without a clock, starting the creator's clock at 0" $
+        run (do r <- storeTopicFor aliceU aliceD topicX Nothing (TopicName "X") Nothing
+                t <- loadTopic topicX
+                ts <- topicsList aliceU
+                pure (r, t, ts))
+            `shouldBe` ( Nothing
+                       , Just (Topic topicX (clock [(alice, 0)]) (TopicName "X") Nothing pureNow)
+                       , [topicX] )
+
+    it "returns the stored topic when a clockless create hits an existing topic" $
+        let stored = Topic topicX (clock [(alice, 0)]) (TopicName "alice's") Nothing pureNow
+        in run (do _ <- storeTopicFor aliceU aliceD topicX Nothing (TopicName "alice's") Nothing
+                   storeTopicFor bobU bobD topicX Nothing (TopicName "bob's") Nothing)
+            `shouldBe` Just stored
+
     it "stops listing a note under a topic it has moved out of" $
         run (do _ <- putIn topicX aliceU aliceD noteA Nothing "a"
                 _ <- putIn topicX bobU bobD noteC Nothing "c"
@@ -195,6 +210,36 @@ noteStoreSpec name run' = describe name $ do
                 , V.empty
                 )
 
+    it "loads no topic from an empty store" $
+        run' (loadTopic topicX) `shouldReturn` Nothing
+
+    it "stores a new topic, loads it back and grants it to the creator" $
+        run' (do w <- storeTopic aliceU (topic topicX [(alice, 1)] "X")
+                 t <- loadTopic topicX
+                 ts <- topicsForUser aliceU
+                 pure (w, t, ts))
+            `shouldReturn` (Clean, Just (topic topicX [(alice, 1)] "X"), V.fromList [topicX])
+
+    it "stores a topic without a description" $
+        let t = Topic topicX (clock [(alice, 1)]) (TopicName "X") Nothing pureNow
+        in run' (storeTopic aliceU t >> loadTopic topicX) `shouldReturn` Just t
+
+    it "accepts a topic write whose clock dominates the stored one" $
+        run' (do _ <- storeTopic aliceU (topic topicX [(alice, 1)] "v1")
+                 w <- storeTopic bobU (topic topicX [(alice, 1), (bob, 1)] "v2")
+                 t <- loadTopic topicX
+                 pure (w, t))
+            `shouldReturn` (Clean, Just (topic topicX [(alice, 1), (bob, 1)] "v2"))
+
+    it "rejects a stale topic write without granting the topic" $
+        let stored = topic topicX [(alice, 2)] "v2"
+        in run' (do _ <- storeTopic aliceU stored
+                    w <- storeTopic bobU (topic topicX [(alice, 1)] "stale")
+                    t <- loadTopic topicX
+                    ts <- topicsForUser bobU
+                    pure (w, t, ts))
+            `shouldReturn` (Conflicted, Just stored, V.empty)
+
     it "keeps different notes independent" $
         run' (do _ <- storeNote aliceU (note noteA [(alice, 5)] "a")
                  w <- storeNote aliceU (note noteB [(alice, 1)] "b")
@@ -229,6 +274,10 @@ note = noteIn defTopicId
 noteIn :: TopicId -> NoteId -> [(UserDevice, Int)] -> Text -> Note
 noteIn tid nid entries content =
     Note nid (clock entries) defTitle (Content content) defColorIndex defShowFull tid pureNow
+
+topic :: TopicId -> [(UserDevice, Int)] -> Text -> Topic
+topic tid entries name =
+    Topic tid (clock entries) (TopicName name) (Just (TopicDescription "about")) pureNow
 
 defTitle :: Title
 defTitle = Title "title"

@@ -5,7 +5,10 @@ module Types ( ColorIndex (..)
              , Note (..)
              , NoteId (..)
              , Title (..)
+             , Topic (..)
+             , TopicDescription (..)
              , TopicId (..)
+             , TopicName (..)
              , UserDevice (..)
              , UserId (..)
              , VectorClock (..)
@@ -85,6 +88,10 @@ instance Newer Note where
     Note _ incoming _ _ _ _ _ _ `isNewerThan` Note _ stored _ _ _ _ _ _ =
         incoming `isNewerThan` stored
 
+instance Newer Topic where
+    Topic _ incoming _ _ _ `isNewerThan` Topic _ stored _ _ _ =
+        incoming `isNewerThan` stored
+
 instance Newer VectorClock where
     VectorClock incoming `isNewerThan` VectorClock stored =
         M.isSubmapOfBy (<=) stored incoming
@@ -104,6 +111,18 @@ newtype ColorIndex
 newtype TopicId
     = TopicId Text
         deriving (Eq, Ord, Show, ToJSON, FromJSON, ToSchema, FromHttpApiData, ToParamSchema)
+
+data Topic
+    = Topic !TopicId !VectorClock !TopicName !(Maybe TopicDescription) !UTCTime
+        deriving (Eq, Show)
+
+newtype TopicName
+    = TopicName Text
+        deriving (Eq, Show, ToJSON, FromJSON, ToSchema)
+
+newtype TopicDescription
+    = TopicDescription Text
+        deriving (Eq, Show, ToJSON, FromJSON, ToSchema)
 
 data Written
     = Clean

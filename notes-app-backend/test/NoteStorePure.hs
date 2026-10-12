@@ -14,11 +14,12 @@ import Types
 
 data Store =
     Store { notes      :: !(Map NoteId Note)
+          , topics     :: !(Map TopicId Topic)
           , userTopics :: !(Map UserId (Set TopicId))
           }
 
 emptyStore :: Store
-emptyStore = Store M.empty M.empty
+emptyStore = Store M.empty M.empty M.empty
 
 newtype NoteStorePure a =
     NoteStorePure (State Store a)
@@ -48,7 +49,23 @@ instance NoteStore NoteStorePure where
 
     addTopicForUser :: UserId -> TopicId -> NoteStorePure ()
     addTopicForUser uid tid = NoteStorePure $
-        modify' $ \(Store ns uts) -> Store ns (grant uid tid uts)
+        modify' $ \(Store ns ts uts) -> Store ns ts (grant uid tid uts)
+
+    loadTopic :: TopicId -> NoteStorePure (Maybe Topic)
+    loadTopic tid = NoteStorePure $ gets (M.lookup tid . topics)
+
+    storeTopic :: UserId -> Topic -> NoteStorePure Written
+    storeTopic uid topic@(Topic tid _ _ _ _) = NoteStorePure $
+
+        gets (M.lookup tid . topics) >>= \case
+
+            Just storedTopic
+                | not (topic `isNewerThan` storedTopic) -> pure Conflicted
+
+            _ -> do
+                modify' $ \(Store ns ts uts) ->
+                    Store ns (M.insert tid topic ts) (grant uid tid uts)
+                pure Clean
 
     notesForTopic :: TopicId -> NoteStorePure (Vector Note)
     notesForTopic tid = NoteStorePure $
@@ -67,8 +84,8 @@ instance NoteStore NoteStorePure where
                 | not (note `isNewerThan` storedNote) -> pure Conflicted
 
             _ -> do
-                modify' $ \(Store ns uts) ->
-                    Store (M.insert nid note ns) (grant uid tid uts)
+                modify' $ \(Store ns ts uts) ->
+                    Store (M.insert nid note ns) ts (grant uid tid uts)
                 pure Clean
 
 grant :: UserId -> TopicId -> Map UserId (Set TopicId) -> Map UserId (Set TopicId)

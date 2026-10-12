@@ -75,6 +75,10 @@ toNote (SQLNoteId nid, value, SQLClock clock, title, colorIndex, showFull, topic
     Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
          showFull (TopicId topicId) updatedAt
 
+toTopic :: (Text, SQLClock, Text, Maybe Text, UTCTime) -> Topic
+toTopic (tid, SQLClock clock, name, description, updatedAt) =
+    Topic (TopicId tid) clock (TopicName name) (TopicDescription <$> description) updatedAt
+
 instance Log NoteStoreSQLite where
 
     lPutStr :: Text -> NoteStoreSQLite ()
@@ -112,6 +116,55 @@ instance NoteStore NoteStoreSQLite where
     addTopicForUser uid (TopicId tid) = NoteStoreSQLite $ do
         conn <- ask
         liftIO $ execute conn sqlAddUserTopic (SQLUserId uid, tid)
+
+    loadTopic :: TopicId -> NoteStoreSQLite (Maybe Topic)
+    loadTopic (TopicId tid) = NoteStoreSQLite $ do
+        conn <- ask
+        liftIO $
+            listToMaybe . map toTopic
+                <$> query conn sqlLoadTopic (Only tid)
+
+        where
+        sqlLoadTopic :: Query
+        sqlLoadTopic = [iii|
+            SELECT id, clock, name, description, updated_at
+            FROM Topic
+            WHERE id = ?; |]
+
+    storeTopic :: UserId -> Topic -> NoteStoreSQLite Written
+    storeTopic uid (Topic (TopicId tid) clock (TopicName name) mDescription updatedAt) = NoteStoreSQLite $ do
+        conn <- ask
+        liftIO . withTransaction conn $ do
+            execute conn sqlStoreTopic ( tid, SQLClock clock, name
+                                       , (\(TopicDescription d) -> d) <$> mDescription
+                                       , updatedAt )
+            changes conn >>= \case
+                0 -> pure Conflicted
+                _ -> do
+                    execute conn sqlAddUserTopic (SQLUserId uid, tid)
+                    pure Clean
+
+        where
+        sqlStoreTopic :: Query
+        sqlStoreTopic = [iii|
+            INSERT INTO Topic (id, clock, name, description, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                clock       = excluded.clock,
+                name        = excluded.name,
+                description = excluded.description,
+                updated_at  = excluded.updated_at
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM json_each(Topic.clock) AS stored
+                WHERE
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM json_each(excluded.clock) AS incoming
+                        WHERE incoming.key = stored.key
+                        AND incoming.value >= stored.value
+                    )
+            ); |]
 
     notesForTopic :: TopicId -> NoteStoreSQLite (Vector Note)
     notesForTopic (TopicId tid) = NoteStoreSQLite $ do

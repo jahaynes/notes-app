@@ -2,6 +2,7 @@ module NotesApp ( addTopic
                 , load
                 , notesFor
                 , store
+                , storeTopicFor
                 , topicsFor
                 ) where
 
@@ -47,3 +48,22 @@ store userId deviceId noteId mVc title content colorIndex showFull topicId = do
         Conflicted ->
             loadNote noteId
 
+
+storeTopicFor :: (NoteStore m, Clock m)
+              => UserId -> DeviceId -> TopicId -> Maybe VectorClock
+              -> TopicName -> Maybe TopicDescription
+              -> m (Maybe Topic)
+storeTopicFor userId deviceId topicId mVc name mDescription = do
+
+    let userDevice  = UserDevice userId deviceId
+        vectorClock = fromMaybe (VectorClock (M.singleton userDevice 0)) mVc
+
+    updatedAt <- now
+
+    storeTopic userId (Topic topicId vectorClock name mDescription updatedAt) >>= \case
+
+        Clean ->
+            pure Nothing
+
+        Conflicted ->
+            loadTopic topicId
