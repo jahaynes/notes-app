@@ -32,6 +32,8 @@ import           Servant.Swagger.UI          (SwaggerSchemaUI, swaggerSchemaUISe
 type NotesAPI =
          "note" :> Capture "noteId" NoteId :> (LoadNote :<|> StoreNote)
     :<|> "topic" :> Capture "topicId" TopicId :> "notes" :> NotesForTopic
+    :<|> "user" :> Capture "userId" UserId :> "topics" :> TopicsForUser
+    :<|> "user" :> Capture "userId" UserId :> "topics" :> Capture "topicId" TopicId :> AddTopic
 
 type LoadNote =
     UVerb 'GET '[JSON] '[ WithStatus 200 NoteView
@@ -46,6 +48,12 @@ type StoreNote =
 
 type NotesForTopic =
     Get '[JSON] [NoteView]
+
+type TopicsForUser =
+    Get '[JSON] [TopicId]
+
+type AddTopic =
+    PutNoContent
 
 type API =
          SwaggerSchemaUI "swagger-ui" "openapi.json"
@@ -99,6 +107,8 @@ app runStore =
 notesServer :: (NoteStore m, Log m, Clock m) => ServerT NotesAPI m
 notesServer = (\nid -> loadHandler nid :<|> storeHandler nid)
     :<|> notesForTopicHandler
+    :<|> topicsForUserHandler
+    :<|> addTopicHandler
 
 loadHandler :: NoteStore m => NoteId -> ServerT LoadNote m
 loadHandler nid =
@@ -114,6 +124,12 @@ storeHandler nid (StoreRequest uid did mVc t c ci sf tid) =
 
 notesForTopicHandler :: NoteStore m => TopicId -> ServerT NotesForTopic m
 notesForTopicHandler tid = map toView . V.toList <$> notesFor tid
+
+topicsForUserHandler :: NoteStore m => UserId -> ServerT TopicsForUser m
+topicsForUserHandler uid = V.toList <$> topicsFor uid
+
+addTopicHandler :: NoteStore m => UserId -> TopicId -> ServerT AddTopic m
+addTopicHandler uid tid = NoContent <$ addTopic uid tid
 
 notesOpenApi :: OpenApi
 notesOpenApi =

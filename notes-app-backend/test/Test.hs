@@ -76,6 +76,26 @@ notesAppSpec = describe "NotesApp" $ do
                 notesList topicY)
             `shouldBe` []
 
+    it "lists the topics a user has written to" $
+        run (do _ <- putIn topicY aliceU aliceD noteA Nothing "a"
+                _ <- putIn topicX aliceU aliceD noteB Nothing "b"
+                _ <- putIn topicX bobU bobD noteC Nothing "c"
+                (,) <$> topicsList aliceU <*> topicsList bobU)
+            `shouldBe` ([topicX, topicY], [topicX])
+
+    it "adds a topic for a user without any notes in it" $
+        run (do addTopic aliceU topicY
+                addTopic aliceU topicX
+                (,) <$> topicsList aliceU <*> notesList topicX)
+            `shouldBe` ([topicX, topicY], [])
+
+    it "adding a topic the user already has changes nothing" $
+        run (do _ <- putIn topicX aliceU aliceD noteA Nothing "a"
+                addTopic aliceU topicX
+                addTopic aliceU topicX
+                (,) <$> topicsList aliceU <*> notesList topicX)
+            `shouldBe` ([topicX], [ noteIn topicX noteA [(alice, 0)] "a" ])
+
     it "stops listing a note under a topic it has moved out of" $
         run (do _ <- putIn topicX aliceU aliceD noteA Nothing "a"
                 _ <- putIn topicX bobU bobD noteC Nothing "c"
@@ -157,6 +177,9 @@ noteStorePureSpec = describe "NoteStorePure" $ do
 
 run :: NoteStorePure a -> a
 run m = runNoteStorePure m emptyStore
+
+topicsList :: UserId -> NoteStorePure [TopicId]
+topicsList = fmap V.toList . topicsFor
 
 notesList :: TopicId -> NoteStorePure [Note]
 notesList = fmap V.toList . notesFor

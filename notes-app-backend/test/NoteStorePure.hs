@@ -46,6 +46,10 @@ instance NoteStore NoteStorePure where
     topicsForUser uid = NoteStorePure $
         gets (V.fromList . maybe [] S.toAscList . M.lookup uid . userTopics)
 
+    addTopicForUser :: UserId -> TopicId -> NoteStorePure ()
+    addTopicForUser uid tid = NoteStorePure $
+        modify' $ \(Store ns uts) -> Store ns (grant uid tid uts)
+
     notesForTopic :: TopicId -> NoteStorePure (Vector Note)
     notesForTopic tid = NoteStorePure $
         gets (V.fromList . filter (\(Note _ _ _ _ _ _ t _) -> t == tid)
@@ -64,6 +68,8 @@ instance NoteStore NoteStorePure where
 
             _ -> do
                 modify' $ \(Store ns uts) ->
-                    Store (M.insert nid note ns)
-                          (M.insertWith S.union uid (S.singleton tid) uts)
+                    Store (M.insert nid note ns) (grant uid tid uts)
                 pure Clean
+
+grant :: UserId -> TopicId -> Map UserId (Set TopicId) -> Map UserId (Set TopicId)
+grant uid tid = M.insertWith S.union uid (S.singleton tid)

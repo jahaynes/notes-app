@@ -56,6 +56,11 @@ create conn = withTransaction conn $
             topic_id TEXT NOT NULL,
             PRIMARY KEY (user_id, topic_id)) WITHOUT ROWID; |]
 
+sqlAddUserTopic :: Query
+sqlAddUserTopic = [iii|
+    INSERT OR IGNORE INTO UserTopic (user_id, topic_id)
+    VALUES (?, ?); |]
+
 toNote :: (SQLNoteId, Text, SQLClock, Text, Int, Bool, Text, UTCTime) -> Note
 toNote (SQLNoteId nid, value, SQLClock clock, title, colorIndex, showFull, topicId, updatedAt) =
     Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
@@ -93,6 +98,11 @@ instance NoteStore NoteStoreSQLite where
             FROM UserTopic
             WHERE user_id = ?
             ORDER BY topic_id; |]
+
+    addTopicForUser :: UserId -> TopicId -> NoteStoreSQLite ()
+    addTopicForUser uid (TopicId tid) = NoteStoreSQLite $ do
+        conn <- ask
+        liftIO $ execute conn sqlAddUserTopic (SQLUserId uid, tid)
 
     notesForTopic :: TopicId -> NoteStoreSQLite (Vector Note)
     notesForTopic (TopicId tid) = NoteStoreSQLite $ do
@@ -133,15 +143,10 @@ instance NoteStore NoteStoreSQLite where
             changes conn >>= \case
                 0 -> pure Conflicted
                 _ -> do
-                    execute conn sqlStoreUserTopic (SQLUserId uid, topicId)
+                    execute conn sqlAddUserTopic (SQLUserId uid, topicId)
                     pure Clean
 
         where
-        sqlStoreUserTopic :: Query
-        sqlStoreUserTopic = [iii|
-            INSERT OR IGNORE INTO UserTopic (user_id, topic_id)
-            VALUES (?, ?); |]
-
         sqlStoreNote :: Query
         sqlStoreNote = [iii|
             INSERT INTO Note (id, value, clock, title, color_index, show_full, topic_id, updated_at)

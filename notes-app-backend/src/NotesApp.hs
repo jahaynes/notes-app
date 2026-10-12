@@ -1,6 +1,8 @@
-module NotesApp ( load
+module NotesApp ( addTopic
+                , load
                 , notesFor
                 , store
+                , topicsFor
                 ) where
 
 import Types
@@ -17,6 +19,14 @@ load = loadNote
 notesFor :: NoteStore m
          => TopicId -> m (Vector Note)
 notesFor = notesForTopic
+
+topicsFor :: NoteStore m
+          => UserId -> m (Vector TopicId)
+topicsFor = topicsForUser
+
+addTopic :: NoteStore m
+         => UserId -> TopicId -> m ()
+addTopic = addTopicForUser
 
 store :: (NoteStore m, Clock m)
       => UserId -> DeviceId -> NoteId -> Maybe VectorClock

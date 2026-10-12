@@ -10,6 +10,8 @@ class Monad m => NoteStore m where
 
     topicsForUser :: UserId -> m (Vector TopicId)
 
+    addTopicForUser :: UserId -> TopicId -> m ()
+
     notesForTopic :: TopicId -> m (Vector Note)
 
     loadNote :: NoteId -> m (Maybe Note)
