@@ -3,24 +3,17 @@ module NoteStore.SQLite.NoteStoreSQLite
     , runNoteStoreSQLite
     ) where
 
-import           Control.Exception.Safe           (bracket)
-import           Control.Monad.IO.Class           (MonadIO (liftIO))
-import           Control.Monad.Trans.Reader       (ReaderT, ask, runReaderT)
-import           Data.Aeson                       (eitherDecodeStrict, encode)
-import qualified Data.ByteString.Lazy             as BL
-import           Data.Functor                     ((<&>))
-import           Data.Maybe                       (listToMaybe)
-import           Data.String.Interpolate          (iii)
-import           Data.Text                        (Text)
-import qualified Data.Text.Encoding               as TE
-import qualified Data.UUID                        as UUID
-import           Database.SQLite.Simple
-import           Database.SQLite.Simple.FromField (FromField (..), returnError)
-import           Database.SQLite.Simple.Ok        (Ok (..))
-import           Database.SQLite.Simple.ToField   (ToField (..))
-
 import NoteStore.Class
+import NoteStore.SQLite.SQLiteTypes
 import Types
+
+import           Control.Exception.Safe     (bracket)
+import           Control.Monad.IO.Class     (MonadIO (liftIO))
+import           Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
+import           Data.Functor               ((<&>))
+import           Data.Maybe                 (listToMaybe)
+import           Data.String.Interpolate    (iii)
+import           Database.SQLite.Simple
 
 newtype NoteStoreSQLite a =
     NoteStoreSQLite (ReaderT Connection IO a)
@@ -83,20 +76,3 @@ selectNote conn nid =
         <$> query conn "SELECT value, clock FROM records WHERE id = ?" (Only (SQLNoteId nid))
   where
     toNote (value, SQLClock clock) = Note nid clock (Content value)
-
-newtype SQLNoteId = SQLNoteId NoteId
-
-instance ToField SQLNoteId where
-    toField (SQLNoteId (NoteId u)) = toField (UUID.toText u)
-
-newtype SQLClock = SQLClock VectorClock
-
-instance ToField SQLClock where
-    toField (SQLClock clock) =
-        toField . TE.decodeUtf8 . BL.toStrict $ encode clock
-
-instance FromField SQLClock where
-    fromField f = fromField f >>= \(t :: Text) ->
-        case eitherDecodeStrict (TE.encodeUtf8 t) of
-            Right clock -> Ok (SQLClock clock)
-            Left err    -> returnError ConversionFailed f err
