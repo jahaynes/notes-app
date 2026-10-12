@@ -7,8 +7,7 @@ import           Data.Map.Strict      (Map)
 import qualified Data.Map.Strict as M
 import           Data.Text            (Text)
 import qualified Data.Text       as T
-import Data.UUID                      (UUID)
-import qualified Data.UUID       as UUID
+import           Data.UUID            (UUID, fromText, toText)
 
 newtype UserId
     = UserId UUID
@@ -40,12 +39,12 @@ instance FromJSONKey UserDevice where
 
 userDeviceText :: UserDevice -> Text
 userDeviceText (UserDevice (UserId u) (DeviceId d)) =
-    UUID.toText u <> ":" <> UUID.toText d
+    toText u <> ":" <> toText d
 
 parseUserDevice :: Text -> Parser UserDevice
 parseUserDevice k = case T.splitOn ":" k of
-    [u, d] | Just u' <- UUID.fromText u
-           , Just d' <- UUID.fromText d ->
+    [u, d] | Just u' <- fromText u
+           , Just d' <- fromText d ->
         pure (UserDevice (UserId u') (DeviceId d'))
     _ -> fail ("invalid user/device key: " <> T.unpack k)
 
