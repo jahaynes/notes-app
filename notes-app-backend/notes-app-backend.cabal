@@ -33,6 +33,7 @@ common common
         sqlite-simple,
         string-interpolate,
         text,
+        time,
         transformers,
         uuid,
         vector,

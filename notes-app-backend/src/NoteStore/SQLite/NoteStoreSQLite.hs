@@ -14,6 +14,7 @@ import           Data.Maybe                 (listToMaybe)
 import           Data.String.Interpolate    (iii)
 import           Data.Text                  (Text)
 import qualified Data.Text.IO as T
+import           Data.Time                  (UTCTime, getCurrentTime)
 import           Data.Vector                (Vector)
 import qualified Data.Vector as V
 import           Database.SQLite.Simple
@@ -35,10 +36,15 @@ create conn = withTransaction conn $
     where
     createNote = [iii|
         CREATE TABLE IF NOT EXISTS Note (
-            id    TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            clock TEXT NOT NULL DEFAULT '{}'
-                CHECK (json_valid(clock) AND json_type(clock) = 'object')); |]
+            id          TEXT PRIMARY KEY,
+            value       TEXT NOT NULL,
+            clock       TEXT NOT NULL DEFAULT '{}'
+                CHECK (json_valid(clock) AND json_type(clock) = 'object'),
+            title       TEXT NOT NULL,
+            color_index INTEGER NOT NULL,
+            show_full   INTEGER NOT NULL CHECK (show_full IN (0, 1)),
+            topic_id    TEXT NOT NULL,
+            updated_at  TEXT NOT NULL); |]
 
     createUserNote = [iii|
         CREATE TABLE IF NOT EXISTS UserNote (
@@ -56,6 +62,11 @@ instance Log NoteStoreSQLite where
 
     lPrint :: Show a => a -> NoteStoreSQLite ()
     lPrint = liftIO . hPrint stderr
+
+instance Clock NoteStoreSQLite where
+
+    now :: NoteStoreSQLite UTCTime
+    now = liftIO getCurrentTime
 
 instance NoteStore NoteStoreSQLite where
 
@@ -83,17 +94,21 @@ instance NoteStore NoteStoreSQLite where
         where
         sqlLoadNote :: Query
         sqlLoadNote = [iii|
-            SELECT value, clock
+            SELECT value, clock, title, color_index, show_full, topic_id, updated_at
             FROM Note
             WHERE id = ?; |]
 
-        toNote (value, SQLClock clock) = Note nid clock (Content value)
+        toNote (value, SQLClock clock, title, colorIndex, showFull, topicId, updatedAt) =
+            Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
+                 showFull (TopicId topicId) updatedAt
 
     storeNote :: UserId -> Note -> NoteStoreSQLite Written
-    storeNote uid (Note nid clock (Content value)) = NoteStoreSQLite $ do
+    storeNote uid (Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
+                        showFull (TopicId topicId) updatedAt) = NoteStoreSQLite $ do
         conn <- ask
         liftIO . withTransaction conn $ do
-            execute conn sqlStoreNote (SQLNoteId nid, value, SQLClock clock)
+            execute conn sqlStoreNote ( SQLNoteId nid, value, SQLClock clock
+                                      , title, colorIndex, showFull, topicId, updatedAt )
             changes conn >>= \case
                 0 -> pure Conflicted
                 _ -> do
@@ -108,11 +123,16 @@ instance NoteStore NoteStoreSQLite where
 
         sqlStoreNote :: Query
         sqlStoreNote = [iii|
-            INSERT INTO Note (id, value, clock)
-            VALUES (?, ?, ?)
+            INSERT INTO Note (id, value, clock, title, color_index, show_full, topic_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
-                value = excluded.value,
-                clock = excluded.clock
+                value       = excluded.value,
+                clock       = excluded.clock,
+                title       = excluded.title,
+                color_index = excluded.color_index,
+                show_full   = excluded.show_full,
+                topic_id    = excluded.topic_id,
+                updated_at  = excluded.updated_at
             WHERE NOT EXISTS (
                 SELECT 1
                 FROM json_each(Note.clock) AS stored

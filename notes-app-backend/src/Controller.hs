@@ -19,7 +19,9 @@ import Types
 import           Control.Lens                ((&), (.~), (?~))
 import           Control.Monad.IO.Class      (liftIO)
 import           Data.Aeson                  (FromJSON, ToJSON)
-import           Data.OpenApi                (NamedSchema (..), OpenApi, ToSchema (..), description, info, title, version)
+import           Data.OpenApi                (NamedSchema (..), OpenApi, ToSchema (..), description, info, version)
+import qualified Data.OpenApi as OpenApi
+import           Data.Time                   (UTCTime)
 import qualified Data.Vector as V
 import           GHC.Generics                (Generic)
 import           Network.Wai.Middleware.Cors (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
@@ -50,9 +52,14 @@ type API =
     :<|> NotesAPI
 
 data NoteView =
-    NoteView { noteId  :: !NoteId
-             , clock   :: !VectorClock
-             , content :: !Content
+    NoteView { noteId     :: !NoteId
+             , clock      :: !VectorClock
+             , title      :: !Title
+             , content    :: !Content
+             , colorIndex :: !ColorIndex
+             , showFull   :: !Bool
+             , topicId    :: !TopicId
+             , updatedAt  :: !UTCTime
              } deriving (Eq, Show, Generic)
 
 instance ToJSON   NoteView
@@ -60,10 +67,14 @@ instance FromJSON NoteView
 instance ToSchema NoteView
 
 data StoreRequest =
-    StoreRequest { userId   :: !UserId
-                 , deviceId :: !DeviceId
-                 , clock    :: !(Maybe VectorClock)
-                 , content  :: !Content
+    StoreRequest { userId     :: !UserId
+                 , deviceId   :: !DeviceId
+                 , clock      :: !(Maybe VectorClock)
+                 , title      :: !Title
+                 , content    :: !Content
+                 , colorIndex :: !ColorIndex
+                 , showFull   :: !Bool
+                 , topicId    :: !TopicId
                  } deriving (Eq, Show, Generic)
 
 instance ToJSON   StoreRequest
@@ -75,17 +86,17 @@ instance ToSchema NoContent where
     declareNamedSchema _ = pure (NamedSchema Nothing mempty)
 
 toView :: Note -> NoteView
-toView (Note nid vc c) = NoteView nid vc c
+toView (Note nid vc t c ci sf tid ua) = NoteView nid vc t c ci sf tid ua
 
 -- | The whole application, run against any 'NoteStore' that can be run in 'IO'.
-app :: (NoteStore m, Log m) => (forall a. m a -> IO a) -> Application
+app :: (NoteStore m, Log m, Clock m) => (forall a. m a -> IO a) -> Application
 app runStore =
     cors (const (Just localCors)) $
         serve (Proxy @API) $
                  swaggerSchemaUIServer notesOpenApi
             :<|> hoistServer (Proxy @NotesAPI) (liftIO . runStore) notesServer
 
-notesServer :: (NoteStore m, Log m) => ServerT NotesAPI m
+notesServer :: (NoteStore m, Log m, Clock m) => ServerT NotesAPI m
 notesServer = (\nid -> loadHandler nid :<|> storeHandler nid)
     :<|> notesForUserHandler
 
@@ -95,9 +106,9 @@ loadHandler nid =
         Just note -> respond (WithStatus @200 (toView note))
         Nothing   -> respond (WithStatus @404 NoContent)
 
-storeHandler :: NoteStore m => NoteId -> ServerT StoreNote m
-storeHandler nid (StoreRequest uid did mVc c) =
-    store uid did nid mVc c >>= \case
+storeHandler :: (NoteStore m, Clock m) => NoteId -> ServerT StoreNote m
+storeHandler nid (StoreRequest uid did mVc t c ci sf tid) =
+    store uid did nid mVc t c ci sf tid >>= \case
         Nothing   -> respond (WithStatus @204 NoContent)
         Just note -> respond (WithStatus @409 (toView note))
 
@@ -107,7 +118,7 @@ notesForUserHandler uid = map toView . V.toList <$> notesFor uid
 notesOpenApi :: OpenApi
 notesOpenApi =
     toOpenApi (Proxy @NotesAPI)
-        & info . title       .~ "Notes API"
+        & info . OpenApi.title .~ "Notes API"
         & info . version     .~ "0.1.0.0"
         & info . description ?~ "PUT returns 204 on a clean write, \
                                 \or 409 with the stored note on a vector clock conflict."

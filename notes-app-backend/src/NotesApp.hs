@@ -33,14 +33,18 @@ notesFor userId = do
 
     pure present
 
-store :: NoteStore m
-      => UserId -> DeviceId -> NoteId -> Maybe VectorClock -> Content -> m (Maybe Note)
-store userId deviceId noteId mVc content =
+store :: (NoteStore m, Clock m)
+      => UserId -> DeviceId -> NoteId -> Maybe VectorClock
+      -> Title -> Content -> ColorIndex -> Bool -> TopicId
+      -> m (Maybe Note)
+store userId deviceId noteId mVc title content colorIndex showFull topicId = do
 
     let userDevice  = UserDevice userId deviceId
-        vectorClock = fromMaybe (VectorClock (M.singleton userDevice 0)) mVc in
+        vectorClock = fromMaybe (VectorClock (M.singleton userDevice 0)) mVc
 
-    storeNote userId (Note noteId vectorClock content) >>= \case
+    updatedAt <- now
+
+    storeNote userId (Note noteId vectorClock title content colorIndex showFull topicId updatedAt) >>= \case
 
         Clean ->
             pure Nothing

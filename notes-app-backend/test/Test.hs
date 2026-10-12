@@ -24,44 +24,44 @@ notesAppSpec = describe "NotesApp" $ do
         run (load noteA) `shouldBe` Nothing
 
     it "stores a new note without a clock, starting the writer's clock at 0" $
-        run (do r <- store aliceU aliceD noteA Nothing (Content "hi")
+        run (do r <- put aliceU aliceD noteA Nothing "hi"
                 n <- load noteA
                 pure (r, n))
             `shouldBe` (Nothing, Just (note noteA [(alice, 0)] "hi"))
 
     it "stores a new note with the supplied clock as-is" $
-        run (do r <- store aliceU aliceD noteA (Just (clock [(bob, 3)])) (Content "hi")
+        run (do r <- put aliceU aliceD noteA (Just (clock [(bob, 3)])) "hi"
                 n <- load noteA
                 pure (r, n))
             `shouldBe` (Nothing, Just (note noteA [(bob, 3)] "hi"))
 
     it "overwrites when the supplied clock dominates the stored one" $
-        run (do _ <- store aliceU aliceD noteA Nothing (Content "v1")
-                r <- store bobU bobD noteA (Just (clock [(alice, 0), (bob, 1)])) (Content "v2")
+        run (do _ <- put aliceU aliceD noteA Nothing "v1"
+                r <- put bobU bobD noteA (Just (clock [(alice, 0), (bob, 1)])) "v2"
                 n <- load noteA
                 pure (r, n))
             `shouldBe` (Nothing, Just (note noteA [(alice, 0), (bob, 1)] "v2"))
 
     it "returns the stored note on a stale clock and leaves it untouched" $
         let stored = note noteA [(alice, 2)] "v2"
-        in run (do _ <- store aliceU aliceD noteA (Just (clock [(alice, 2)])) (Content "v2")
-                   r <- store aliceU aliceD noteA (Just (clock [(alice, 1)])) (Content "stale")
+        in run (do _ <- put aliceU aliceD noteA (Just (clock [(alice, 2)])) "v2"
+                   r <- put aliceU aliceD noteA (Just (clock [(alice, 1)])) "stale"
                    n <- load noteA
                    pure (r, n))
             `shouldBe` (Just stored, Just stored)
 
     it "returns the stored note when a clockless write hits another device's note" $
         let stored = note noteA [(alice, 0)] "alice's"
-        in run (do _ <- store aliceU aliceD noteA Nothing (Content "alice's")
-                   r <- store bobU bobD noteA Nothing (Content "bob's")
+        in run (do _ <- put aliceU aliceD noteA Nothing "alice's"
+                   r <- put bobU bobD noteA Nothing "bob's"
                    n <- load noteA
                    pure (r, n))
             `shouldBe` (Just stored, Just stored)
 
     it "lists the notes each user has written" $
-        run (do _ <- store aliceU aliceD noteA Nothing (Content "a")
-                _ <- store aliceU aliceD noteB Nothing (Content "b")
-                _ <- store bobU bobD noteB (Just (clock [(alice, 0), (bob, 0)])) (Content "b2")
+        run (do _ <- put aliceU aliceD noteA Nothing "a"
+                _ <- put aliceU aliceD noteB Nothing "b"
+                _ <- put bobU bobD noteB (Just (clock [(alice, 0), (bob, 0)])) "b2"
                 (,) <$> notesList aliceU <*> notesList bobU)
             `shouldBe`
                 ( [ note noteA [(alice, 0)] "a"
@@ -71,8 +71,8 @@ notesAppSpec = describe "NotesApp" $ do
                 )
 
     it "does not list a note for a user whose write conflicted" $
-        run (do _ <- store aliceU aliceD noteA Nothing (Content "alice's")
-                _ <- store bobU bobD noteA Nothing (Content "bob's")
+        run (do _ <- put aliceU aliceD noteA Nothing "alice's"
+                _ <- put bobU bobD noteA Nothing "bob's"
                 notesList bobU)
             `shouldBe` []
 
@@ -134,8 +134,25 @@ run m = runNoteStorePure m emptyStore
 notesList :: UserId -> NoteStorePure [Note]
 notesList = fmap V.toList . notesFor
 
+put :: UserId -> DeviceId -> NoteId -> Maybe VectorClock -> Text -> NoteStorePure (Maybe Note)
+put uid did nid mVc content =
+    store uid did nid mVc defTitle (Content content) defColorIndex defShowFull defTopicId
+
 note :: NoteId -> [(UserDevice, Int)] -> Text -> Note
-note nid entries content = Note nid (clock entries) (Content content)
+note nid entries content =
+    Note nid (clock entries) defTitle (Content content) defColorIndex defShowFull defTopicId pureNow
+
+defTitle :: Title
+defTitle = Title "title"
+
+defColorIndex :: ColorIndex
+defColorIndex = ColorIndex 0
+
+defShowFull :: Bool
+defShowFull = False
+
+defTopicId :: TopicId
+defTopicId = TopicId "topic"
 
 clock :: [(UserDevice, Int)] -> VectorClock
 clock = VectorClock . M.fromList

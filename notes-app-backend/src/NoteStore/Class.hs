@@ -3,6 +3,7 @@ module NoteStore.Class where
 import Types
 
 import Data.Text   (Text)
+import Data.Time   (UTCTime)
 import Data.Vector (Vector)
 
 class Monad m => NoteStore m where
@@ -20,3 +21,7 @@ class Log m where
     lPutStrLn :: Text -> m ()
 
     lPrint :: Show a => a -> m ()
+
+class Clock m where
+
+    now :: m UTCTime

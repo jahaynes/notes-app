@@ -1,8 +1,11 @@
-module Types ( Content (..)
+module Types ( ColorIndex (..)
+             , Content (..)
              , DeviceId (..)
              , Newer (..)
              , Note (..)
              , NoteId (..)
+             , Title (..)
+             , TopicId (..)
              , UserDevice (..)
              , UserId (..)
              , VectorClock (..)
@@ -19,6 +22,7 @@ import           Data.OpenApi         (NamedSchema (..), OpenApiType (OpenApiStr
                                        ToParamSchema, ToSchema (..), description, type_)
 import           Data.Text            (Text)
 import qualified Data.Text       as T
+import           Data.Time            (UTCTime)
 import           Data.UUID            (UUID, fromText, toText)
 import           Web.HttpApiData      (FromHttpApiData)
 
@@ -67,7 +71,7 @@ parseUserDevice k = case T.splitOn ":" k of
     _ -> fail ("invalid user/device key: " <> T.unpack k)
 
 data Note
-    = Note !NoteId !VectorClock !Content
+    = Note !NoteId !VectorClock !Title !Content !ColorIndex !Bool !TopicId !UTCTime
         deriving (Eq, Show)
 
 newtype VectorClock =
@@ -78,7 +82,7 @@ class Newer a where
     isNewerThan :: a -> a -> Bool
 
 instance Newer Note where
-    Note _ incoming _ `isNewerThan` Note _ stored _ =
+    Note _ incoming _ _ _ _ _ _ `isNewerThan` Note _ stored _ _ _ _ _ _ =
         incoming `isNewerThan` stored
 
 instance Newer VectorClock where
@@ -87,6 +91,18 @@ instance Newer VectorClock where
 
 newtype Content
     = Content Text
+        deriving (Eq, Show, ToJSON, FromJSON, ToSchema)
+
+newtype Title
+    = Title Text
+        deriving (Eq, Show, ToJSON, FromJSON, ToSchema)
+
+newtype ColorIndex
+    = ColorIndex Int
+        deriving (Eq, Show, ToJSON, FromJSON, ToSchema)
+
+newtype TopicId
+    = TopicId Text
         deriving (Eq, Show, ToJSON, FromJSON, ToSchema)
 
 data Written

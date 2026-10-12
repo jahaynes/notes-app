@@ -1,10 +1,11 @@
-module NoteStorePure (NoteStorePure, Store, emptyStore, runNoteStorePure) where
+module NoteStorePure (NoteStorePure, Store, emptyStore, pureNow, runNoteStorePure) where
 
 import           Control.Monad.Trans.State.Strict (State, evalState, gets, modify')
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict as M
 import           Data.Set                         (Set)
 import qualified Data.Set        as S
+import           Data.Time                        (UTCTime (..), fromGregorian)
 import qualified Data.Vector     as V
 
 import NoteStore.Class
@@ -25,6 +26,13 @@ newtype NoteStorePure a =
 runNoteStorePure :: NoteStorePure a -> Store -> a
 runNoteStorePure (NoteStorePure m) = evalState m
 
+-- | Time stands still.
+instance Clock NoteStorePure where
+    now = pure pureNow
+
+pureNow :: UTCTime
+pureNow = UTCTime (fromGregorian 2026 1 1) 0
+
 -- | Logs are discarded.
 instance Log NoteStorePure where
     lPutStr _   = pure ()
@@ -41,7 +49,7 @@ instance NoteStore NoteStorePure where
     loadNote nid = NoteStorePure $ gets (M.lookup nid . notes)
 
     storeNote :: UserId -> Note -> NoteStorePure Written
-    storeNote uid note@(Note nid _ _) = NoteStorePure $
+    storeNote uid note@(Note nid _ _ _ _ _ _ _) = NoteStorePure $
 
         gets (M.lookup nid . notes) >>= \case
 
