@@ -9,20 +9,10 @@ class Topic {
   /// A topic with [name] and a fresh unique id.
   factory Topic.create(String name) => Topic(id: _uuid.v4(), name: name);
 
-  /// The default topic. It always exists and can't be deleted.
-  static const uncategorised = Topic(
-    id: uncategorisedId,
-    name: 'Uncategorised',
-  );
-
-  static const uncategorisedId = 'uncategorised';
-
   static const _uuid = Uuid();
 
   final String id;
   final String name;
-
-  bool get isDefault => id == uncategorisedId;
 
   @override
   bool operator ==(Object other) =>

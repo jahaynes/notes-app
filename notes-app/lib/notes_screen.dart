@@ -23,7 +23,7 @@ class _NotesScreenState extends State<NotesScreen> {
   bool _sidebarOpenedForDrag = false;
 
   /// The topic whose notes are shown, or null to show all notes.
-  String? _topicId = Topic.uncategorisedId;
+  late String? _topicId = store.defaultTopic.id;
 
   /// Ids of the notes, or of the topics, ticked for deletion. Only one kind
   /// is ticked at a time; either being non-empty means selection mode.
@@ -99,11 +99,16 @@ class _NotesScreenState extends State<NotesScreen> {
       ? null
       : store.topics.value.firstWhere(
           (t) => t.id == _topicId,
-          orElse: () => Topic.uncategorised,
+          orElse: () => store.defaultTopic,
         );
 
-  /// Deletes [topics] once the user confirms, moving their notes to
-  /// Uncategorised. There's no undo for topics, hence the prompt.
+  bool get _canDeleteSelectedTopic {
+    final topic = _selectedTopic;
+    return topic != null && !store.isDefault(topic);
+  }
+
+  /// Deletes [topics] once the user confirms, moving their notes to the
+  /// default topic. There's no undo for topics, hence the prompt.
   Future<void> _deleteTopics(List<Topic> topics) async {
     if (topics.isEmpty) return;
     final one = topics.length == 1;
@@ -125,7 +130,7 @@ class _NotesScreenState extends State<NotesScreen> {
                     ? 'This topic has no notes.'
                     : 'These topics have no notes.')
               : '${one ? 'Its' : 'Their'} ${count == 1 ? 'note' : '$count notes'} '
-                    'will be moved to Uncategorised.',
+                    'will be moved to ${store.defaultTopic.name}.',
         ),
         actions: [
           TextButton(
@@ -143,8 +148,8 @@ class _NotesScreenState extends State<NotesScreen> {
     store.dispatch(DeleteTopics(ids));
     setState(() {
       _selectedTopics.clear();
-      // If the shown topic went, follow its notes to Uncategorised.
-      if (ids.contains(_topicId)) _topicId = Topic.uncategorisedId;
+      // If the shown topic went, follow its notes to the default topic.
+      if (ids.contains(_topicId)) _topicId = store.defaultTopic.id;
     });
   }
 
@@ -253,7 +258,7 @@ class _NotesScreenState extends State<NotesScreen> {
           tooltip: 'Search',
           onPressed: () => setState(() => _searching = true),
         ),
-      if (!_searching && !(_selectedTopic?.isDefault ?? true))
+      if (!_searching && _canDeleteSelectedTopic)
         IconButton(
           icon: const Icon(Icons.delete_outline),
           tooltip: 'Delete topic',
@@ -452,14 +457,15 @@ class _Sidebar extends StatelessWidget {
                                       : scheme.primaryContainer,
                                   selected: topic.id == selectedTopicId,
                                   // The default topic can't be ticked for deletion.
-                                  enabled: !(selecting && topic.isDefault),
+                                  enabled:
+                                      !(selecting && store.isDefault(topic)),
                                   onTap: selecting
                                       ? () => onToggle(topic)
                                       : () => onSelect(topic.id),
-                                  onLongPress: topic.isDefault
+                                  onLongPress: store.isDefault(topic)
                                       ? null
                                       : () => onToggle(topic),
-                                  trailing: selecting && !topic.isDefault
+                                  trailing: selecting && !store.isDefault(topic)
                                       ? Checkbox(
                                           value: checkedTopicIds.contains(
                                             topic.id,
@@ -468,7 +474,7 @@ class _Sidebar extends StatelessWidget {
                                         )
                                       : null,
                                   leading: Icon(
-                                    topic.isDefault
+                                    store.isDefault(topic)
                                         ? Icons.inbox_outlined
                                         : Icons.label_outline,
                                   ),

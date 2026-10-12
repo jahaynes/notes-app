@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,41 +15,74 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 Future<NoteStore> _freshStore() async {
   SharedPreferences.setMockInitialValues({});
-  return LocalNoteStore(await SharedPreferences.getInstance());
+  return LocalNoteStore.open(await SharedPreferences.getInstance());
 }
 
 void main() {
   test('store persists, and drops empty notes', () async {
     final store = await _freshStore();
-    final a = Note.create().copyWith(title: 'A');
-    final b = Note.create().copyWith(title: 'B');
+    final a = Note.create(topicId: store.defaultTopic.id).copyWith(title: 'A');
+    final b = Note.create(topicId: store.defaultTopic.id).copyWith(title: 'B');
     await store.dispatch(SaveNote(a));
     await store.dispatch(SaveNote(b));
-    await store.dispatch(SaveNote(Note.create())); // empty, ignored
+    await store.dispatch(
+      SaveNote(Note.create(topicId: store.defaultTopic.id)),
+    ); // empty, ignored
 
     expect(store.notes.value.map((n) => n.title), ['B', 'A']);
     expect(store.search('a').single.title, 'A');
 
     // Reload from the same prefs.
-    final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
+    final reloaded = await LocalNoteStore.open(
+      await SharedPreferences.getInstance(),
+    );
     expect(reloaded.notes.value.length, 2);
   });
 
   test('topics persist, and the default topic is undeletable', () async {
     final store = await _freshStore();
-    expect(store.topics.value, [Topic.uncategorised]);
+    expect(store.topics.value, [store.defaultTopic]);
 
     final work = Topic.create('Work');
     final home = Topic.create('Home');
     await store.dispatch(AddTopic(work));
     await store.dispatch(AddTopic(home));
     await store.dispatch(DeleteTopics([work.id]));
-    await store.dispatch(DeleteTopics([Topic.uncategorisedId])); // ignored
+    await store.dispatch(DeleteTopics([store.defaultTopic.id])); // ignored
 
-    expect(store.topics.value, [Topic.uncategorised, home]);
+    expect(store.topics.value, [store.defaultTopic, home]);
 
-    final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
-    expect(reloaded.topics.value, [Topic.uncategorised, home]);
+    final reloaded = await LocalNoteStore.open(
+      await SharedPreferences.getInstance(),
+    );
+    expect(reloaded.topics.value, [store.defaultTopic, home]);
+  });
+
+  test('the user and their default topic are created once', () async {
+    final store = await _freshStore();
+    expect(store.defaultTopic.name, 'Uncategorised');
+    expect(store.defaultTopic.id, isNot('uncategorised'));
+
+    final reloaded = await LocalNoteStore.open(
+      await SharedPreferences.getInstance(),
+    );
+    expect(reloaded.user, store.user);
+  });
+
+  test('notes saved before the user existed join the default topic', () async {
+    SharedPreferences.setMockInitialValues({
+      'notes_v1': jsonEncode([
+        {'id': 'a', 'title': 'Pseudo-topic', 'topicId': 'uncategorised'},
+        {'id': 'b', 'title': 'No topic'},
+      ]),
+    });
+    final prefs = await SharedPreferences.getInstance();
+    final store = await LocalNoteStore.open(prefs);
+    expect(
+      store.notes.value.map((n) => n.topicId),
+      everyElement(store.defaultTopic.id),
+    );
+    expect(prefs.getString('notes_v1'), isNot(contains('"uncategorised"')));
   });
 
   testWidgets('add and delete topics from the sidebar', (tester) async {
@@ -89,7 +124,7 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
     await tester.pumpAndSettle();
     expect(find.text('Recipes'), findsNothing);
-    expect(store.topics.value, [Topic.uncategorised]);
+    expect(store.topics.value, [store.defaultTopic]);
 
     // Now on Uncategorised, with the moved note; it can't be deleted.
     expect(find.text('Pancakes'), findsOneWidget);
@@ -155,7 +190,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
     await tester.pumpAndSettle();
-    expect(store.topics.value, [Topic.uncategorised, c]);
+    expect(store.topics.value, [store.defaultTopic, c]);
     expect(find.byType(Checkbox), findsNothing);
 
     // A was being shown, so the view follows its note to Uncategorised.
@@ -163,7 +198,7 @@ void main() {
     expect(find.text('In B'), findsOneWidget);
     expect(
       store.notes.value.map((n) => n.topicId),
-      everyElement(Topic.uncategorisedId),
+      everyElement(store.defaultTopic.id),
     );
 
     // Back leaves selection mode.
@@ -188,10 +223,12 @@ void main() {
 
     // Restoring a note whose topic has gone puts it in Uncategorised too.
     await store.dispatch(const UndoDelete());
-    expect(store.notes.value.single.topicId, Topic.uncategorisedId);
+    expect(store.notes.value.single.topicId, store.defaultTopic.id);
 
-    final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
-    expect(reloaded.notes.value.single.topicId, Topic.uncategorisedId);
+    final reloaded = await LocalNoteStore.open(
+      await SharedPreferences.getInstance(),
+    );
+    expect(reloaded.notes.value.single.topicId, store.defaultTopic.id);
   });
 
   testWidgets('topics filter the notes, and new notes join the selected one', (
@@ -200,7 +237,11 @@ void main() {
     final store = await _freshStore();
     final work = Topic.create('Work');
     await store.dispatch(AddTopic(work));
-    await store.dispatch(SaveNote(Note.create().copyWith(title: 'Loose')));
+    await store.dispatch(
+      SaveNote(
+        Note.create(topicId: store.defaultTopic.id).copyWith(title: 'Loose'),
+      ),
+    );
     await store.dispatch(
       SaveNote(Note.create(topicId: work.id).copyWith(title: 'Report')),
     );
@@ -237,7 +278,11 @@ void main() {
     final store = await _freshStore();
     final work = Topic.create('Work');
     await store.dispatch(AddTopic(work));
-    await store.dispatch(SaveNote(Note.create().copyWith(title: 'Report')));
+    await store.dispatch(
+      SaveNote(
+        Note.create(topicId: store.defaultTopic.id).copyWith(title: 'Report'),
+      ),
+    );
     await tester.pumpWidget(NoteishApp(store: store));
 
     await tester.tap(find.text('Report'));
@@ -286,7 +331,11 @@ void main() {
   ) async {
     final store = await _freshStore();
     for (final title in ['One', 'Two', 'Three']) {
-      await store.dispatch(SaveNote(Note.create().copyWith(title: title)));
+      await store.dispatch(
+        SaveNote(
+          Note.create(topicId: store.defaultTopic.id).copyWith(title: title),
+        ),
+      );
     }
     await tester.pumpWidget(NoteishApp(store: store));
     expect(find.byType(Checkbox), findsNothing);
@@ -332,7 +381,11 @@ void main() {
     final work = Topic.create('Work');
     await store.dispatch(AddTopic(work));
     for (final title in ['One', 'Two', 'Three']) {
-      await store.dispatch(SaveNote(Note.create().copyWith(title: title)));
+      await store.dispatch(
+        SaveNote(
+          Note.create(topicId: store.defaultTopic.id).copyWith(title: title),
+        ),
+      );
     }
     final stamps = {for (final n in store.notes.value) n.id: n.updatedAt};
     await tester.pumpWidget(NoteishApp(store: store));
@@ -383,7 +436,11 @@ void main() {
     addTearDown(tester.view.reset);
     final store = await _freshStore();
     for (final title in ['One', 'Two']) {
-      await store.dispatch(SaveNote(Note.create().copyWith(title: title)));
+      await store.dispatch(
+        SaveNote(
+          Note.create(topicId: store.defaultTopic.id).copyWith(title: title),
+        ),
+      );
     }
     await tester.pumpWidget(NoteishApp(store: store));
 
@@ -396,7 +453,11 @@ void main() {
   testWidgets('opening a note cancels ticked topics', (tester) async {
     final store = await _freshStore();
     await store.dispatch(AddTopic(Topic.create('Work')));
-    await store.dispatch(SaveNote(Note.create().copyWith(title: 'Loose')));
+    await store.dispatch(
+      SaveNote(
+        Note.create(topicId: store.defaultTopic.id).copyWith(title: 'Loose'),
+      ),
+    );
     await tester.pumpWidget(NoteishApp(store: store));
     await tester.tap(find.byTooltip('Show sidebar'));
     await tester.pumpAndSettle();
@@ -441,8 +502,16 @@ void main() {
 
   testWidgets('back closes search rather than the app', (tester) async {
     final store = await _freshStore();
-    await store.dispatch(SaveNote(Note.create().copyWith(title: 'One')));
-    await store.dispatch(SaveNote(Note.create().copyWith(title: 'Two')));
+    await store.dispatch(
+      SaveNote(
+        Note.create(topicId: store.defaultTopic.id).copyWith(title: 'One'),
+      ),
+    );
+    await store.dispatch(
+      SaveNote(
+        Note.create(topicId: store.defaultTopic.id).copyWith(title: 'Two'),
+      ),
+    );
     await tester.pumpWidget(NoteishApp(store: store));
     await tester.tap(find.byTooltip('Search'));
     await tester.pump();
@@ -461,7 +530,11 @@ void main() {
   ) async {
     final store = await _freshStore();
     final body = List.generate(20, (i) => 'line $i').join('\n');
-    store.dispatch(SaveNote(Note.create().copyWith(body: body)));
+    store.dispatch(
+      SaveNote(
+        Note.create(topicId: store.defaultTopic.id).copyWith(body: body),
+      ),
+    );
     await tester.pumpWidget(NoteishApp(store: store));
 
     expect(tester.widget<Text>(find.text(body)).maxLines, 8);
@@ -476,7 +549,9 @@ void main() {
     expect(store.notes.value.single.showFull, isTrue);
     expect(tester.widget<Text>(find.text(body)).maxLines, isNull);
 
-    final reloaded = LocalNoteStore(await SharedPreferences.getInstance());
+    final reloaded = await LocalNoteStore.open(
+      await SharedPreferences.getInstance(),
+    );
     expect(reloaded.notes.value.single.showFull, isTrue);
   });
 

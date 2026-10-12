@@ -11,7 +11,7 @@ import 'store/note_store.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  runApp(NoteishApp(store: LocalNoteStore(prefs)));
+  runApp(NoteishApp(store: await LocalNoteStore.open(prefs)));
 }
 
 class NoteishApp extends StatefulWidget {
@@ -38,9 +38,9 @@ class _NoteishAppState extends State<NoteishApp> {
               final topicId = state.uri.queryParameters['topic'];
               return EditorScreen(
                 store: widget.store,
-                note: topicId == null
-                    ? Note.create()
-                    : Note.create(topicId: topicId),
+                note: Note.create(
+                  topicId: topicId ?? widget.store.defaultTopic.id,
+                ),
               );
             },
           ),

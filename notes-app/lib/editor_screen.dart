@@ -66,7 +66,9 @@ class _EditorScreenState extends State<EditorScreen> {
             for (final topic in widget.store.topics.value)
               ListTile(
                 leading: Icon(
-                  topic.isDefault ? Icons.inbox_outlined : Icons.label_outline,
+                  widget.store.isDefault(topic)
+                      ? Icons.inbox_outlined
+                      : Icons.label_outline,
                 ),
                 title: Text(topic.name),
                 trailing: topic.id == _note.topicId

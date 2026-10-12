@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../note.dart';
 import '../topic.dart';
+import '../user.dart';
 
 /// A change the UI asks the store to make.
 sealed class NoteAction {
@@ -9,7 +10,7 @@ sealed class NoteAction {
 }
 
 /// Inserts or replaces [note]. Saving an empty note deletes it instead, and a
-/// note whose topic no longer exists is saved to [Topic.uncategorised].
+/// note whose topic no longer exists is saved to [NoteStore.defaultTopic].
 final class SaveNote extends NoteAction {
   const SaveNote(this.note);
 
@@ -46,7 +47,7 @@ final class AddTopic extends NoteAction {
 }
 
 /// Removes the topics with [ids], moving their notes to
-/// [Topic.uncategorised]. The default topic can't be deleted.
+/// [NoteStore.defaultTopic], which can't itself be deleted.
 final class DeleteTopics extends NoteAction {
   const DeleteTopics(this.ids);
 
@@ -56,12 +57,19 @@ final class DeleteTopics extends NoteAction {
 /// Source of truth for notes. Actions flow in through [dispatch]; the
 /// resulting state flows out through [notes].
 abstract class NoteStore {
+  /// Whose notes these are.
+  User get user;
+
+  Topic get defaultTopic => user.defaultTopic;
+
+  bool isDefault(Topic topic) => topic.id == defaultTopic.id;
+
   /// All notes, most recently updated first. Each change publishes a new,
   /// unmodifiable list rather than mutating the old one.
   ValueListenable<List<Note>> get notes;
 
-  /// All topics, [Topic.uncategorised] first and the rest in the order they
-  /// were added. Published the same way as [notes].
+  /// All topics, [defaultTopic] first and the rest in the order they were
+  /// added. Published the same way as [notes].
   ValueListenable<List<Topic>> get topics;
 
   /// The notes removed by the most recent [DeleteNotes], until they're

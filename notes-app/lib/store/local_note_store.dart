@@ -5,19 +5,41 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../note.dart';
 import '../topic.dart';
+import '../user.dart';
 import 'note_store.dart';
 
 /// Keeps notes and topics in memory and persists them to SharedPreferences as
 /// JSON.
 class LocalNoteStore extends NoteStore {
-  LocalNoteStore(this._prefs)
-    : _notes = ValueNotifier(_load(_prefs)),
-      _topics = ValueNotifier(_loadTopics(_prefs));
+  LocalNoteStore._(this._prefs, this.user, List<Topic> topics, List<Note> notes)
+    : _topics = ValueNotifier(topics),
+      _notes = ValueNotifier(notes);
+
+  /// Loads the store saved in [prefs], first creating the user if there
+  /// isn't one yet.
+  static Future<LocalNoteStore> open(SharedPreferences prefs) async {
+    final user = await _loadUser(prefs);
+    final topics = _loadTopics(prefs, user.defaultTopic);
+    final notes = _load(prefs, user.defaultTopic.id);
+    final store = LocalNoteStore._(prefs, user, topics, notes);
+    // Notes saved before the user existed are in a topic that doesn't, so
+    // move them to the default one.
+    final topicIds = {for (final t in topics) t.id};
+    if (notes.any((n) => !topicIds.contains(n.topicId))) {
+      await store._saveNotes(notes);
+    }
+    return store;
+  }
 
   static const _key = 'notes_v1';
   static const _topicsKey = 'topics_v1';
+  static const _userKey = 'user_v1';
 
   final SharedPreferences _prefs;
+
+  @override
+  final User user;
+
   final ValueNotifier<List<Note>> _notes;
   final ValueNotifier<List<Topic>> _topics;
   final _lastDeleted = ValueNotifier<List<Note>>(const []);
@@ -60,7 +82,7 @@ class LocalNoteStore extends NoteStore {
       case AddTopic(:final topic):
         await _setTopics([..._topics.value, topic]);
       case DeleteTopics(:final ids):
-        final idSet = ids.toSet()..remove(Topic.uncategorisedId);
+        final idSet = ids.toSet()..remove(defaultTopic.id);
         if (idSet.isEmpty) return;
         await _setTopics([
           for (final t in _topics.value)
@@ -70,7 +92,7 @@ class LocalNoteStore extends NoteStore {
           await _setNotes([
             for (final n in _notes.value)
               idSet.contains(n.topicId)
-                  ? n.copyWith(topicId: Topic.uncategorisedId)
+                  ? n.copyWith(topicId: defaultTopic.id)
                   : n,
           ]);
         }
@@ -93,7 +115,7 @@ class LocalNoteStore extends NoteStore {
         if (!n.isEmpty)
           topicIds.contains(n.topicId)
               ? n
-              : n.copyWith(topicId: Topic.uncategorisedId),
+              : n.copyWith(topicId: defaultTopic.id),
     ]);
   }
 
@@ -108,30 +130,44 @@ class LocalNoteStore extends NoteStore {
 
   Future<void> _setTopics(List<Topic> topics) async {
     _topics.value = List.unmodifiable(topics);
-    // The default topic is implicit, so it isn't stored.
+    // The default topic is stored with the user, not here.
     await _prefs.setString(
       _topicsKey,
       jsonEncode([
         for (final t in topics)
-          if (!t.isDefault) t.toJson(),
+          if (!isDefault(t)) t.toJson(),
       ]),
     );
   }
 
-  static List<Note> _load(SharedPreferences prefs) {
+  static Future<User> _loadUser(SharedPreferences prefs) async {
+    final raw = prefs.getString(_userKey);
+    if (raw != null) {
+      return User.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    }
+    final user = User.create();
+    await prefs.setString(_userKey, jsonEncode(user.toJson()));
+    return user;
+  }
+
+  static List<Note> _load(SharedPreferences prefs, String defaultTopicId) {
     final raw = prefs.getString(_key);
     if (raw == null) return const [];
     final list = jsonDecode(raw) as List<dynamic>;
-    return _sorted(
-      list.map((e) => Note.fromJson(e as Map<String, dynamic>)).toList(),
-    );
+    return _sorted([
+      for (final e in list)
+        Note.fromJson(
+          e as Map<String, dynamic>,
+          defaultTopicId: defaultTopicId,
+        ),
+    ]);
   }
 
-  static List<Topic> _loadTopics(SharedPreferences prefs) {
+  static List<Topic> _loadTopics(SharedPreferences prefs, Topic defaultTopic) {
     final raw = prefs.getString(_topicsKey);
     final list = raw == null ? const [] : jsonDecode(raw) as List<dynamic>;
     return List.unmodifiable([
-      Topic.uncategorised,
+      defaultTopic,
       for (final e in list) Topic.fromJson(e as Map<String, dynamic>),
     ]);
   }

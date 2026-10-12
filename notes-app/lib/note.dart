@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
-import 'topic.dart';
-
 /// Palette of note background colors. Index 0 means "no color".
 const noteColors = <Color?>[
   null,
@@ -24,12 +22,12 @@ class Note {
     this.body = '',
     this.colorIndex = 0,
     this.showFull = false,
-    this.topicId = Topic.uncategorisedId,
+    required this.topicId,
     DateTime? updatedAt,
   }) : updatedAt = updatedAt ?? DateTime.now();
 
   /// A blank note in [topicId] with a fresh unique id.
-  factory Note.create({String topicId = Topic.uncategorisedId}) =>
+  factory Note.create({required String topicId}) =>
       Note(id: _uuid.v4(), topicId: topicId);
 
   static const _uuid = Uuid();
@@ -90,13 +88,18 @@ class Note {
     'updatedAt': updatedAt.toIso8601String(),
   };
 
-  factory Note.fromJson(Map<String, dynamic> json) => Note(
+  /// Decodes a note, putting it in [defaultTopicId] if it was saved before
+  /// notes had topics.
+  factory Note.fromJson(
+    Map<String, dynamic> json, {
+    required String defaultTopicId,
+  }) => Note(
     id: json['id'] as String,
     title: json['title'] as String? ?? '',
     body: json['body'] as String? ?? '',
     colorIndex: json['colorIndex'] as int? ?? 0,
     showFull: json['showFull'] as bool? ?? false,
-    topicId: json['topicId'] as String? ?? Topic.uncategorisedId,
+    topicId: json['topicId'] as String? ?? defaultTopicId,
     updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? ''),
   );
 }
