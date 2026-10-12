@@ -18,7 +18,7 @@ class LocalNoteStore extends NoteStore {
   /// Loads the store saved in [prefs], first creating the user if there
   /// isn't one yet.
   static Future<LocalNoteStore> open(SharedPreferences prefs) async {
-    final user = await _loadUser(prefs);
+    final user = await loadUser(prefs);
     final topics = _loadTopics(prefs, user.defaultTopic);
     final notes = _load(prefs, user.defaultTopic.id);
     final store = LocalNoteStore._(prefs, user, topics, notes);
@@ -140,7 +140,8 @@ class LocalNoteStore extends NoteStore {
     );
   }
 
-  static Future<User> _loadUser(SharedPreferences prefs) async {
+  /// The user saved in [prefs], created and saved first if there isn't one.
+  static Future<User> loadUser(SharedPreferences prefs) async {
     final raw = prefs.getString(_userKey);
     if (raw != null) {
       return User.fromJson(jsonDecode(raw) as Map<String, dynamic>);

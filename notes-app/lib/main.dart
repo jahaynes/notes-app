@@ -1,17 +1,35 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'editor_screen.dart';
 import 'note.dart';
 import 'notes_screen.dart';
+import 'store/http_note_store.dart';
 import 'store/local_note_store.dart';
 import 'store/note_store.dart';
+
+/// The Notes API base URL, e.g. `--dart-define=NOTES_API=http://127.0.0.1:8081/`.
+/// Notes are kept on the device when it isn't set.
+const _notesApi = String.fromEnvironment('NOTES_API');
+
+/// The user to sign in to the Notes API as, e.g.
+/// `--dart-define=NOTES_USER=<uuid>`. The device's own user when not set.
+const _notesUser = String.fromEnvironment('NOTES_USER');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  runApp(NoteishApp(store: await LocalNoteStore.open(prefs)));
+  final NoteStore store = _notesApi.isEmpty
+      ? await LocalNoteStore.open(prefs)
+      : await HttpNoteStore.open(
+          http.Client(),
+          Uri.parse(_notesApi),
+          prefs,
+          userId: _notesUser.isEmpty ? null : _notesUser,
+        );
+  runApp(NoteishApp(store: store));
 }
 
 class NoteishApp extends StatefulWidget {
