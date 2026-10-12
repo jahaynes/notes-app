@@ -59,7 +59,7 @@ type NotesForTopic =
     Get '[JSON] [NoteView]
 
 type TopicsForUser =
-    Get '[JSON] [TopicId]
+    Get '[JSON] [TopicView]
 
 type AddTopic =
     PutNoContent
@@ -169,7 +169,7 @@ notesForTopicHandler :: NoteStore m => TopicId -> ServerT NotesForTopic m
 notesForTopicHandler tid = map toView . V.toList <$> notesFor tid
 
 topicsForUserHandler :: NoteStore m => UserId -> ServerT TopicsForUser m
-topicsForUserHandler uid = V.toList <$> topicsFor uid
+topicsForUserHandler uid = map toTopicView . V.toList <$> topicsFor uid
 
 addTopicHandler :: NoteStore m => UserId -> TopicId -> ServerT AddTopic m
 addTopicHandler uid tid = NoContent <$ addTopic uid tid

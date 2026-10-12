@@ -22,8 +22,8 @@ notesFor :: NoteStore m
 notesFor = notesForTopic
 
 topicsFor :: NoteStore m
-          => UserId -> m (Vector TopicId)
-topicsFor = topicsForUser
+          => UserId -> m (Vector Topic)
+topicsFor = loadTopicsForUser
 
 addTopic :: NoteStore m
          => UserId -> TopicId -> m ()

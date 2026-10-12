@@ -115,6 +115,13 @@ notesAppSpec = describe "NotesApp" $ do
                    storeTopicFor bobU bobD topicX Nothing (TopicName "bob's") Nothing)
             `shouldBe` Just stored
 
+    it "lists the full topics a user has stored" $
+        run (do _ <- storeTopicFor aliceU aliceD topicY Nothing (TopicName "Y") Nothing
+                _ <- storeTopicFor aliceU aliceD topicX Nothing (TopicName "X") Nothing
+                V.toList <$> topicsFor aliceU)
+            `shouldBe` [ Topic topicX (clock [(alice, 0)]) (TopicName "X") Nothing pureNow
+                       , Topic topicY (clock [(alice, 0)]) (TopicName "Y") Nothing pureNow ]
+
     it "stops listing a note under a topic it has moved out of" $
         run (do _ <- putIn topicX aliceU aliceD noteA Nothing "a"
                 _ <- putIn topicX bobU bobD noteC Nothing "c"
@@ -240,6 +247,20 @@ noteStoreSpec name run' = describe name $ do
                     pure (w, t, ts))
             `shouldReturn` (Conflicted, Just stored, V.empty)
 
+    it "loads the full topics a user has, in id order" $
+        run' (do _ <- storeTopic aliceU (topic topicY [(alice, 1)] "Y")
+                 _ <- storeTopic aliceU (topic topicX [(alice, 1)] "X")
+                 _ <- storeTopic bobU (topic topicZ [(bob, 1)] "Z")
+                 loadTopicsForUser aliceU)
+            `shouldReturn` V.fromList [ topic topicX [(alice, 1)] "X"
+                                      , topic topicY [(alice, 1)] "Y" ]
+
+    it "leaves out granted topics that have never been stored" $
+        run' (do _ <- storeTopic aliceU (topic topicX [(alice, 1)] "X")
+                 addTopicForUser aliceU topicY
+                 loadTopicsForUser aliceU)
+            `shouldReturn` V.fromList [ topic topicX [(alice, 1)] "X" ]
+
     it "keeps different notes independent" $
         run' (do _ <- storeNote aliceU (note noteA [(alice, 5)] "a")
                  w <- storeNote aliceU (note noteB [(alice, 1)] "b")
@@ -256,7 +277,7 @@ run :: NoteStorePure a -> a
 run m = runNoteStorePure m emptyStore
 
 topicsList :: UserId -> NoteStorePure [TopicId]
-topicsList = fmap V.toList . topicsFor
+topicsList = fmap V.toList . topicsForUser
 
 notesList :: TopicId -> NoteStorePure [Note]
 notesList = fmap V.toList . notesFor
@@ -302,9 +323,10 @@ noteA = NoteId (uuid 1)
 noteB = NoteId (uuid 2)
 noteC = NoteId (uuid 3)
 
-topicX, topicY :: TopicId
+topicX, topicY, topicZ :: TopicId
 topicX = TopicId "x"
 topicY = TopicId "y"
+topicZ = TopicId "z"
 
 aliceU, bobU :: UserId
 aliceU = UserId (uuid 10)

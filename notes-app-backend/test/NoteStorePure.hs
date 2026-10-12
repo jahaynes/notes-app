@@ -2,6 +2,7 @@ module NoteStorePure (NoteStorePure, Store, emptyStore, pureNow, runNoteStorePur
 
 import           Control.Monad.Trans.State.Strict (State, evalState, gets, modify')
 import           Data.Map.Strict                  (Map)
+import           Data.Maybe                       (mapMaybe)
 import qualified Data.Map.Strict as M
 import           Data.Set                         (Set)
 import qualified Data.Set        as S
@@ -46,6 +47,12 @@ instance NoteStore NoteStorePure where
     topicsForUser :: UserId -> NoteStorePure (Vector TopicId)
     topicsForUser uid = NoteStorePure $
         gets (V.fromList . maybe [] S.toAscList . M.lookup uid . userTopics)
+
+    loadTopicsForUser :: UserId -> NoteStorePure (Vector Topic)
+    loadTopicsForUser uid = NoteStorePure $ do
+        tids <- gets (maybe [] S.toAscList . M.lookup uid . userTopics)
+        ts   <- gets topics
+        pure (V.fromList (mapMaybe (`M.lookup` ts) tids))
 
     addTopicForUser :: UserId -> TopicId -> NoteStorePure ()
     addTopicForUser uid tid = NoteStorePure $

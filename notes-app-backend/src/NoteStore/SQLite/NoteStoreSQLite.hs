@@ -112,6 +112,22 @@ instance NoteStore NoteStoreSQLite where
             WHERE user_id = ?
             ORDER BY topic_id; |]
 
+    loadTopicsForUser :: UserId -> NoteStoreSQLite (Vector Topic)
+    loadTopicsForUser uid = NoteStoreSQLite $ do
+        conn <- ask
+        liftIO $
+            V.fromList . map toTopic
+                <$> query conn sqlLoadTopicsForUser (Only (SQLUserId uid))
+
+        where
+        sqlLoadTopicsForUser :: Query
+        sqlLoadTopicsForUser = [iii|
+            SELECT Topic.id, Topic.clock, Topic.name, Topic.description, Topic.updated_at
+            FROM UserTopic
+            JOIN Topic ON Topic.id = UserTopic.topic_id
+            WHERE UserTopic.user_id = ?
+            ORDER BY Topic.id; |]
+
     addTopicForUser :: UserId -> TopicId -> NoteStoreSQLite ()
     addTopicForUser uid (TopicId tid) = NoteStoreSQLite $ do
         conn <- ask
