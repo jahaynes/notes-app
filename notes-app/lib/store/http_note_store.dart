@@ -25,17 +25,16 @@ class NotesApiException implements Exception {
 }
 
 /// Keeps notes in the Notes API backend, with the latest state held in
-/// memory. Changes show up locally straight away. A changed note is sent to
-/// the backend once it's gone [_writeDelay] without changing again, and
-/// requests go one at a time, in the order they were sent.
+/// memory. Changes show up locally straight away. A changed or deleted note
+/// is sent to the backend once it's gone [_writeDelay] without changing
+/// again, and requests go one at a time, in the order they were sent.
 ///
 /// This device's id lives in SharedPreferences, as does the user unless
 /// one is passed to [open].
 ///
-/// The backend can't delete notes or remove topics yet, so [DeleteNotes],
-/// saving an empty note and [DeleteTopics] only change what this store
-/// holds in memory, and the deleted things come back the next time it's
-/// opened. Notes moved out of a deleted topic do stay moved.
+/// The backend can't remove topics yet, so [DeleteTopics] only changes what
+/// this store holds in memory, and the deleted topics come back the next
+/// time it's opened. Notes moved out of them do stay moved.
 class HttpNoteStore extends NoteStore {
   HttpNoteStore._(
     this._client,
@@ -123,11 +122,10 @@ class HttpNoteStore extends NoteStore {
   /// from its entry here has changes the backend hasn't seen yet.
   final Map<String, Note> _synced;
 
-  /// Notes waiting out [_writeDelay] before they're written, by id.
-  final _unsent = <String, _UnsentNote>{};
+  /// Writes waiting out [_writeDelay] before they're sent, by note id.
+  final _unsent = <String, _Unsent>{};
 
-  /// Ids of the notes and topics deleted here, which the backend still has.
-  final _deletedNotes = <String>{};
+  /// Ids of the topics deleted here, which the backend still has.
   final _deletedTopics = <String>{};
 
   final ValueNotifier<List<Note>> _notes;
@@ -161,15 +159,12 @@ class HttpNoteStore extends NoteStore {
             if (idSet.contains(n.id)) n,
         ];
         if (deleted.isEmpty) return;
-        for (final n in deleted) {
-          _deletedNotes.add(n.id);
-          _discardWrite(n.id);
-        }
         _lastDeleted.value = List.unmodifiable(deleted);
         _notes.value = _sorted([
           for (final n in _notes.value)
             if (!idSet.contains(n.id)) n,
         ]);
+        await Future.wait([for (final n in deleted) _write(n.id, _Delete())]);
       case MoveNotes(:final ids, :final topicId):
         final idSet = ids.toSet();
         await _saveNotes([
@@ -261,9 +256,9 @@ class HttpNoteStore extends NoteStore {
 
   /// Replaces the notes picked out by [inScope] with [views], the backend's
   /// copies of them. Notes with changes the backend hasn't seen yet are left
-  /// alone, as their writes will settle them, and notes deleted here stay
-  /// deleted. An unchanged note in scope that isn't in [views] has been moved
-  /// out of scope elsewhere, so it's dropped until its new scope is fetched.
+  /// alone, as their writes will settle them, and that includes notes
+  /// waiting to be deleted. An unchanged note in scope that isn't in [views]
+  /// has been moved out of scope or deleted elsewhere, so it's dropped.
   ///
   /// Only safe to call from a request run by [_enqueue], so that no write
   /// sent earlier is still in flight.
@@ -273,7 +268,7 @@ class HttpNoteStore extends NoteStore {
   ) {
     final fetched = {
       for (final json in views)
-        if (!_deletedNotes.contains(json['noteId']))
+        if (!_deleting(json['noteId'] as String))
           json['noteId'] as String: json,
     };
     final next = <Note>[];
@@ -295,7 +290,7 @@ class HttpNoteStore extends NoteStore {
   }
 
   /// Inserts or replaces [notes] as described by [SaveNote], then writes the
-  /// non-empty ones to the backend.
+  /// non-empty ones to the backend and deletes the empty ones from it.
   Future<void> _saveNotes(List<Note> notes) async {
     if (notes.isEmpty) return;
     final ids = {for (final n in notes) n.id};
@@ -312,34 +307,31 @@ class HttpNoteStore extends NoteStore {
               ? n
               : n.copyWith(topicId: defaultTopic.id),
     ];
-    for (final n in notes) {
-      if (n.isEmpty) {
-        _deletedNotes.add(n.id);
-        _discardWrite(n.id);
-      } else {
-        _deletedNotes.remove(n.id);
-      }
-    }
     _notes.value = _sorted([
       for (final n in _notes.value)
         if (!ids.contains(n.id)) n,
       ...saved,
     ]);
-    await Future.wait([for (final n in saved) _write(n)]);
+    await Future.wait([
+      for (final n in saved) _write(n.id, _Put(n)),
+      for (final n in notes)
+        if (n.isEmpty) _write(n.id, _Delete()),
+    ]);
   }
 
-  /// Writes [note] once it's gone [_writeDelay] without being written again,
-  /// replacing any earlier version still waiting. Completes when it has been.
-  Future<void> _write(Note note) {
-    final timer = Timer(_writeDelay, () => _send(note.id));
-    final unsent = _unsent[note.id];
+  /// Sends [write] for the note [id] once it's gone [_writeDelay] without
+  /// another, replacing any earlier one still waiting. Completes when it has
+  /// been sent.
+  Future<void> _write(String id, _Write write) {
+    final timer = Timer(_writeDelay, () => _send(id));
+    final unsent = _unsent[id];
     if (unsent == null) {
-      return (_unsent[note.id] = _UnsentNote(note, timer)).done.future;
+      return (_unsent[id] = _Unsent(write, timer)).done.future;
     }
     unsent
       ..timer.cancel()
       ..timer = timer
-      ..note = note;
+      ..write = write;
     return unsent.done.future;
   }
 
@@ -348,16 +340,18 @@ class HttpNoteStore extends NoteStore {
     final unsent = _unsent.remove(id);
     if (unsent == null) return;
     unsent.timer.cancel();
-    unsent.done.complete(_enqueue(() => _putNote(unsent.note)));
+    unsent.done.complete(
+      _enqueue(
+        () => switch (unsent.write) {
+          _Put(:final note) => _putNote(note),
+          _Delete() => _deleteNote(id),
+        },
+      ),
+    );
   }
 
-  /// Drops the write waiting for the note [id], if there is one.
-  void _discardWrite(String id) {
-    final unsent = _unsent.remove(id);
-    if (unsent == null) return;
-    unsent.timer.cancel();
-    unsent.done.complete();
-  }
+  /// Whether the note [id] is waiting to be deleted.
+  bool _deleting(String id) => _unsent[id]?.write is _Delete;
 
   /// Writes [note] with this device's clock entry bumped. On a conflict the
   /// backend keeps its copy and returns it, and that copy replaces ours.
@@ -388,12 +382,8 @@ class HttpNoteStore extends NoteStore {
         _clocks[note.id] = _clockFrom(json);
         final stored = _fromView(json);
         _synced[stored.id] = stored;
-        if (_deletedNotes.contains(stored.id)) return;
-        _notes.value = _sorted([
-          for (final n in _notes.value)
-            if (n.id != stored.id) n,
-          stored,
-        ]);
+        if (_deleting(stored.id)) return;
+        _replaceNote(stored);
       default:
         throw NotesApiException(
           'PUT $path',
@@ -402,6 +392,51 @@ class HttpNoteStore extends NoteStore {
         );
     }
   }
+
+  /// Deletes the note [id] from the backend. If it's been changed elsewhere
+  /// since this store last saw it, the backend keeps it and returns it, and
+  /// it comes back here with those changes.
+  Future<void> _deleteNote(String id) async {
+    final clock = _clocks[id];
+    // Never written or read, so the backend hasn't got it.
+    if (clock == null) return;
+    final path = 'note/$id';
+    final response = await _client.delete(
+      _baseUri.resolve(path),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({'clock': clock}),
+    );
+    switch (response.statusCode) {
+      case 204:
+        _clocks.remove(id);
+        _synced.remove(id);
+      case 409:
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        _clocks[id] = _clockFrom(json);
+        final stored = _fromView(json);
+        _synced[id] = stored;
+        // Undoing the delete would put back the version it overrode.
+        if (_lastDeleted.value.any((n) => n.id == id)) {
+          _lastDeleted.value = List.unmodifiable(
+            _lastDeleted.value.where((n) => n.id != id),
+          );
+        }
+        _replaceNote(stored);
+      default:
+        throw NotesApiException(
+          'DELETE $path',
+          response.statusCode,
+          response.body,
+        );
+    }
+  }
+
+  /// Puts [note] in place of the note with its id, adding it if there's none.
+  void _replaceNote(Note note) => _notes.value = _sorted([
+    for (final n in _notes.value)
+      if (n.id != note.id) n,
+    note,
+  ]);
 
   /// Runs [request] once every earlier one has finished, so writes reach the
   /// backend in order and each sees the clock the one before it left.
@@ -513,13 +548,24 @@ class HttpNoteStore extends NoteStore {
   );
 }
 
-/// A write held back by [HttpNoteStore._write] until [note] stops changing.
-class _UnsentNote {
-  _UnsentNote(this.note, this.timer);
+/// What [HttpNoteStore] sends the backend for a note.
+sealed class _Write {}
 
-  Note note;
+final class _Put extends _Write {
+  _Put(this.note);
+
+  final Note note;
+}
+
+final class _Delete extends _Write {}
+
+/// A write held back by [HttpNoteStore._write] until the note stops changing.
+class _Unsent {
+  _Unsent(this.write, this.timer);
+
+  _Write write;
   Timer timer;
 
-  /// Completes once [note], or whichever version replaces it, is written.
+  /// Completes once [write], or whichever write replaces it, is sent.
   final done = Completer<void>();
 }
