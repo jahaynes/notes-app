@@ -5,7 +5,8 @@
 {-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeOperators         #-}
 
-module Controller ( NotesAPI
+module Controller ( DeleteRequest (..)
+                  , NotesAPI
                   , NoteView (..)
                   , StoreRequest (..)
                   , StoreTopicRequest (..)
@@ -32,7 +33,7 @@ import           Servant.OpenApi             (toOpenApi)
 import           Servant.Swagger.UI          (SwaggerSchemaUI, swaggerSchemaUIServer)
 
 type NotesAPI =
-         "note" :> Capture "noteId" NoteId :> (LoadNote :<|> StoreNote)
+         "note" :> Capture "noteId" NoteId :> (LoadNote :<|> StoreNote :<|> DeleteNote)
     :<|> "topic" :> Capture "topicId" TopicId :> StoreTopic
     :<|> "topic" :> Capture "topicId" TopicId :> "notes" :> NotesForTopic
     :<|> "user" :> Capture "userId" UserId :> "topics" :> TopicsForUser
@@ -48,6 +49,12 @@ type StoreNote =
         :> UVerb 'PUT '[JSON] '[ WithStatus 204 NoContent
                                , WithStatus 409 NoteView
                                ]
+
+type DeleteNote =
+    ReqBody '[JSON] DeleteRequest
+        :> UVerb 'DELETE '[JSON] '[ WithStatus 204 NoContent
+                                  , WithStatus 409 NoteView
+                                  ]
 
 type StoreTopic =
     ReqBody '[JSON] StoreTopicRequest
@@ -98,6 +105,14 @@ instance ToJSON   StoreRequest
 instance FromJSON StoreRequest
 instance ToSchema StoreRequest
 
+newtype DeleteRequest =
+    DeleteRequest { clock :: VectorClock
+                  } deriving (Eq, Show, Generic)
+
+instance ToJSON   DeleteRequest
+instance FromJSON DeleteRequest
+instance ToSchema DeleteRequest
+
 data TopicView =
     TopicView { topicId     :: !TopicId
               , clock       :: !VectorClock
@@ -141,7 +156,7 @@ app runStore =
             :<|> hoistServer (Proxy @NotesAPI) (liftIO . runStore) notesServer
 
 notesServer :: (NoteStore m, Log m, Clock m) => ServerT NotesAPI m
-notesServer = (\nid -> loadHandler nid :<|> storeHandler nid)
+notesServer = (\nid -> loadHandler nid :<|> storeHandler nid :<|> deleteHandler nid)
     :<|> storeTopicHandler
     :<|> notesForTopicHandler
     :<|> topicsForUserHandler
@@ -156,6 +171,12 @@ loadHandler nid =
 storeHandler :: (NoteStore m, Clock m) => NoteId -> ServerT StoreNote m
 storeHandler nid (StoreRequest uid did mVc t c ci sf tid) =
     store uid did nid mVc t c ci sf tid >>= \case
+        Nothing   -> respond (WithStatus @204 NoContent)
+        Just note -> respond (WithStatus @409 (toView note))
+
+deleteHandler :: NoteStore m => NoteId -> ServerT DeleteNote m
+deleteHandler nid (DeleteRequest vc) =
+    delete nid vc >>= \case
         Nothing   -> respond (WithStatus @204 NoContent)
         Just note -> respond (WithStatus @409 (toView note))
 
@@ -180,7 +201,9 @@ notesOpenApi =
         & info . OpenApi.title .~ "Notes API"
         & info . version     .~ "0.1.0.0"
         & info . OpenApi.description ?~ "PUT returns 204 on a clean write, \
-                                \or 409 with the stored note on a vector clock conflict."
+                                \or 409 with the stored note on a vector clock conflict. \
+                                \DELETE likewise returns 204 once the note is gone \
+                                \(including if it never existed), or 409 with the stored note."
 
 localCors :: CorsResourcePolicy
 localCors =

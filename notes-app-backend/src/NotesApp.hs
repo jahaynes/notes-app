@@ -1,4 +1,5 @@
 module NotesApp ( addTopic
+                , delete
                 , load
                 , notesFor
                 , store
@@ -41,6 +42,18 @@ store userId deviceId noteId mVc title content colorIndex showFull topicId = do
     updatedAt <- now
 
     storeNote userId (Note noteId vectorClock title content colorIndex showFull topicId updatedAt) >>= \case
+
+        Clean ->
+            pure Nothing
+
+        Conflicted ->
+            loadNote noteId
+
+delete :: NoteStore m
+       => NoteId -> VectorClock -> m (Maybe Note)
+delete noteId vectorClock =
+
+    deleteNote noteId vectorClock >>= \case
 
         Clean ->
             pure Nothing

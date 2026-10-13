@@ -248,3 +248,37 @@ instance NoteStore NoteStoreSQLite where
                         AND incoming.value >= stored.value
                     )
             ); |]
+
+    deleteNote :: NoteId -> VectorClock -> NoteStoreSQLite Written
+    deleteNote nid clock = NoteStoreSQLite $ do
+        conn <- ask
+        liftIO . withTransaction conn $ do
+            execute conn sqlDeleteNote (SQLNoteId nid, SQLClock clock)
+            changes conn >>= \case
+                0 -> query conn sqlNoteExists (Only (SQLNoteId nid)) >>= \case
+                         []                -> pure Clean
+                         (_ :: [Only Int]) -> pure Conflicted
+                _ -> pure Clean
+
+        where
+        sqlDeleteNote :: Query
+        sqlDeleteNote = [iii|
+            DELETE FROM Note
+            WHERE id = ?
+            AND NOT EXISTS (
+                SELECT 1
+                FROM json_each(Note.clock) AS stored
+                WHERE
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM json_each(?) AS incoming
+                        WHERE incoming.key = stored.key
+                        AND incoming.value >= stored.value
+                    )
+            ); |]
+
+        sqlNoteExists :: Query
+        sqlNoteExists = [iii|
+            SELECT 1
+            FROM Note
+            WHERE id = ?; |]

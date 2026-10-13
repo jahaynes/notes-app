@@ -24,6 +24,8 @@ class Monad m => NoteStore m where
 
     storeNote :: UserId -> Note -> m Written
 
+    deleteNote :: NoteId -> VectorClock -> m Written
+
 class Log m where
 
     lPutStr :: Text -> m ()

@@ -132,6 +132,27 @@ notesAppSpec = describe "NotesApp" $ do
                 , [ noteIn topicY noteA [(alice, 1)] "a moved" ]
                 )
 
+    it "deletes a note cleanly when the clock has seen every write" $
+        run (do _ <- put aliceU aliceD noteA Nothing "a"
+                r <- delete noteA (clock [(alice, 0)])
+                (,) r <$> load noteA)
+            `shouldBe` (Nothing, Nothing)
+
+    it "returns the stored note on a stale delete" $
+        let stored = note noteA [(alice, 0), (bob, 1)] "bob's edit"
+        in run (do _ <- put aliceU aliceD noteA Nothing "a"
+                   _ <- put bobU bobD noteA (Just (clock [(alice, 0), (bob, 1)])) "bob's edit"
+                   r <- delete noteA (clock [(alice, 0)])
+                   (,) r <$> load noteA)
+            `shouldBe` (Just stored, Just stored)
+
+    it "starts a deleted note afresh on a later write" $
+        run (do _ <- put aliceU aliceD noteA (Just (clock [(alice, 3)])) "a"
+                _ <- delete noteA (clock [(alice, 3)])
+                r <- put bobU bobD noteA Nothing "new"
+                (,) r <$> load noteA)
+            `shouldBe` (Nothing, Just (note noteA [(bob, 0)] "new"))
+
 -- | Runs the same spec against each 'NoteStore' implementation, so the SQL
 -- conflict check is held to the same semantics as 'isNewerThan'.
 noteStoreSpec :: NoteStore m => String -> (forall a. m a -> IO a) -> Spec
@@ -260,6 +281,42 @@ noteStoreSpec name run' = describe name $ do
                  addTopicForUser aliceU topicY
                  loadTopicsForUser aliceU)
             `shouldReturn` V.fromList [ topic topicX [(alice, 1)] "X" ]
+
+    it "deletes a note whose clock is dominated, dropping it from its topic" $
+        run' (do _ <- storeNote aliceU (noteIn topicX noteA [(alice, 1)] "a")
+                 w <- deleteNote noteA (clock [(alice, 1), (bob, 1)])
+                 (,,) w <$> loadNote noteA <*> notesForTopic topicX)
+            `shouldReturn` (Clean, Nothing, V.empty)
+
+    it "deletes a note with an identical clock" $
+        run' (do _ <- storeNote aliceU (note noteA [(alice, 1)] "a")
+                 w <- deleteNote noteA (clock [(alice, 1)])
+                 (,) w <$> loadNote noteA)
+            `shouldReturn` (Clean, Nothing)
+
+    it "treats deleting an absent note as clean" $
+        run' (deleteNote noteA (clock [(alice, 1)])) `shouldReturn` Clean
+
+    it "rejects a stale delete and keeps the note" $
+        let stored = note noteA [(alice, 2)] "v2"
+        in run' (do _ <- storeNote aliceU stored
+                    w <- deleteNote noteA (clock [(alice, 1)])
+                    (,) w <$> loadNote noteA)
+            `shouldReturn` (Conflicted, Just stored)
+
+    it "rejects a delete missing a key from the stored clock" $
+        let stored = note noteA [(alice, 1), (bob, 1)] "both"
+        in run' (do _ <- storeNote aliceU stored
+                    w <- deleteNote noteA (clock [(alice, 5)])
+                    (,) w <$> loadNote noteA)
+            `shouldReturn` (Conflicted, Just stored)
+
+    it "deletes only the named note" $
+        run' (do _ <- storeNote aliceU (note noteA [(alice, 1)] "a")
+                 _ <- storeNote aliceU (note noteB [(alice, 1)] "b")
+                 _ <- deleteNote noteA (clock [(alice, 1)])
+                 traverse loadNote [noteA, noteB])
+            `shouldReturn` [Nothing, Just (note noteB [(alice, 1)] "b")]
 
     it "keeps different notes independent" $
         run' (do _ <- storeNote aliceU (note noteA [(alice, 5)] "a")

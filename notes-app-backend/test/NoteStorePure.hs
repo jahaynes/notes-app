@@ -95,5 +95,17 @@ instance NoteStore NoteStorePure where
                     Store (M.insert nid note ns) ts (grant uid tid uts)
                 pure Clean
 
+    deleteNote :: NoteId -> VectorClock -> NoteStorePure Written
+    deleteNote nid incoming = NoteStorePure $
+
+        gets (M.lookup nid . notes) >>= \case
+
+            Just (Note _ stored _ _ _ _ _ _)
+                | not (incoming `isNewerThan` stored) -> pure Conflicted
+
+            _ -> do
+                modify' $ \(Store ns ts uts) -> Store (M.delete nid ns) ts uts
+                pure Clean
+
 grant :: UserId -> TopicId -> Map UserId (Set TopicId) -> Map UserId (Set TopicId)
 grant uid tid = M.insertWith S.union uid (S.singleton tid)
