@@ -1,6 +1,6 @@
 module NoteStorePure (NoteStorePure, Store, emptyStore, pureNow, runNoteStorePure) where
 
-import           Control.Monad.Trans.State.Strict (State, evalState, gets, modify')
+import           Control.Monad.Trans.State.Strict (State, evalState, get, gets, modify', put)
 import           Data.Map.Strict                  (Map)
 import           Data.Maybe                       (mapMaybe)
 import qualified Data.Map.Strict as M
@@ -73,6 +73,35 @@ instance NoteStore NoteStorePure where
                 modify' $ \(Store ns ts uts) ->
                     Store ns (M.insert tid topic ts) (grant uid tid uts)
                 pure Clean
+
+    deleteTopic :: UserDevice -> UTCTime -> TopicId -> VectorClock -> TopicId
+                -> NoteStorePure (TopicDeletion ())
+    deleteTopic ud@(UserDevice uid _) updatedAt tid incoming dest = NoteStorePure $ do
+
+        Store ns ts uts <- get
+
+        let hasNotes = any (\(Note _ _ _ _ _ _ ntid _) -> ntid == tid) ns
+            users    = M.size (M.filter (S.member tid) uts)
+
+        case M.lookup tid ts of
+
+            _ | dest == tid || M.notMember dest ts -> pure (TopicRefused NoSuchDestination)
+
+            _ | hasNotes && users > 1 -> pure (TopicRefused SharedWithNotes)
+
+            Just (Topic _ stored _ _ _)
+                | not (incoming `isNewerThan` stored) -> pure (TopicConflicted ())
+
+            _ -> do
+                put $ Store (M.map move ns)
+                            (M.delete tid ts)
+                            (grant uid dest (M.map (S.delete tid) uts))
+                pure TopicDeleted
+
+        where
+        move n@(Note nid vc t c ci sf ntid _)
+            | ntid == tid = Note nid (tick ud vc) t c ci sf dest updatedAt
+            | otherwise   = n
 
     notesForTopic :: TopicId -> NoteStorePure (Vector Note)
     notesForTopic tid = NoteStorePure $

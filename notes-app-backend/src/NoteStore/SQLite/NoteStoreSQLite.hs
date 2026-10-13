@@ -1,3 +1,5 @@
+{-# LANGUAGE MultiWayIf #-}
+
 module NoteStore.SQLite.NoteStoreSQLite
     ( NoteStoreSQLite
     , runNoteStoreSQLite
@@ -181,6 +183,79 @@ instance NoteStore NoteStoreSQLite where
                         AND incoming.value >= stored.value
                     )
             ); |]
+
+    deleteTopic :: UserDevice -> UTCTime -> TopicId -> VectorClock -> TopicId
+                -> NoteStoreSQLite (TopicDeletion ())
+    deleteTopic ud@(UserDevice uid _) updatedAt (TopicId tid) clock (TopicId dest) = NoteStoreSQLite $ do
+        conn <- ask
+        liftIO . withTransaction conn $ do
+
+            destExists <- not . null <$> (query conn sqlTopicExists (Only dest) :: IO [Only Int])
+            [Only sharedWithNotes] <- query conn sqlSharedWithNotes (tid, tid)
+
+            if | dest == tid || not destExists -> pure (TopicRefused NoSuchDestination)
+               | sharedWithNotes               -> pure (TopicRefused SharedWithNotes)
+               | otherwise -> do
+                    execute conn sqlDeleteTopic (tid, SQLClock clock)
+                    changes conn >>= \case
+                        0 -> query conn sqlTopicExists (Only tid) >>= \case
+                                 []                -> moveNotes conn
+                                 (_ :: [Only Int]) -> pure (TopicConflicted ())
+                        _ -> moveNotes conn
+
+        where
+        moveNotes conn = do
+            moved <- query conn sqlNoteClocksInTopic (Only tid)
+            mapM_ (\(nid :: SQLNoteId, SQLClock vc) ->
+                       execute conn sqlMoveNote (dest, SQLClock (tick ud vc), updatedAt, nid))
+                  moved
+            execute conn sqlRevokeTopic (Only tid)
+            execute conn sqlAddUserTopic (SQLUserId uid, dest)
+            pure TopicDeleted
+
+        sqlTopicExists :: Query
+        sqlTopicExists = [iii|
+            SELECT 1
+            FROM Topic
+            WHERE id = ?; |]
+
+        sqlSharedWithNotes :: Query
+        sqlSharedWithNotes = [iii|
+            SELECT (SELECT COUNT(*) FROM UserTopic WHERE topic_id = ?) > 1
+               AND EXISTS (SELECT 1 FROM Note WHERE topic_id = ?); |]
+
+        sqlDeleteTopic :: Query
+        sqlDeleteTopic = [iii|
+            DELETE FROM Topic
+            WHERE id = ?
+            AND NOT EXISTS (
+                SELECT 1
+                FROM json_each(Topic.clock) AS stored
+                WHERE
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM json_each(?) AS incoming
+                        WHERE incoming.key = stored.key
+                        AND incoming.value >= stored.value
+                    )
+            ); |]
+
+        sqlNoteClocksInTopic :: Query
+        sqlNoteClocksInTopic = [iii|
+            SELECT id, clock
+            FROM Note
+            WHERE topic_id = ?; |]
+
+        sqlMoveNote :: Query
+        sqlMoveNote = [iii|
+            UPDATE Note
+            SET topic_id = ?, clock = ?, updated_at = ?
+            WHERE id = ?; |]
+
+        sqlRevokeTopic :: Query
+        sqlRevokeTopic = [iii|
+            DELETE FROM UserTopic
+            WHERE topic_id = ?; |]
 
     notesForTopic :: TopicId -> NoteStoreSQLite (Vector Note)
     notesForTopic (TopicId tid) = NoteStoreSQLite $ do

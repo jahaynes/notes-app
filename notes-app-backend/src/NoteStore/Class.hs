@@ -18,6 +18,8 @@ class Monad m => NoteStore m where
 
     storeTopic :: UserId -> Topic -> m Written
 
+    deleteTopic :: UserDevice -> UTCTime -> TopicId -> VectorClock -> TopicId -> m (TopicDeletion ())
+
     notesForTopic :: TopicId -> m (Vector Note)
 
     loadNote :: NoteId -> m (Maybe Note)

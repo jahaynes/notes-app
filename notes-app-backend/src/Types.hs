@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveGeneric #-}
+
 module Types ( ColorIndex (..)
              , Content (..)
              , DeviceId (..)
@@ -6,13 +8,16 @@ module Types ( ColorIndex (..)
              , NoteId (..)
              , Title (..)
              , Topic (..)
+             , TopicDeletion (..)
              , TopicDescription (..)
+             , TopicRefusal (..)
              , TopicId (..)
              , TopicName (..)
              , UserDevice (..)
              , UserId (..)
              , VectorClock (..)
              , Written (..)
+             , tick
              ) where
 
 import           Control.Lens         ((&), (?~))
@@ -27,6 +32,7 @@ import           Data.Text            (Text)
 import qualified Data.Text       as T
 import           Data.Time            (UTCTime)
 import           Data.UUID            (UUID, fromText, toText)
+import           GHC.Generics         (Generic)
 import           Web.HttpApiData      (FromHttpApiData)
 
 newtype UserId
@@ -96,6 +102,10 @@ instance Newer VectorClock where
     VectorClock incoming `isNewerThan` VectorClock stored =
         M.isSubmapOfBy (<=) stored incoming
 
+-- | Advances one device's entry, as a write made on that device would.
+tick :: UserDevice -> VectorClock -> VectorClock
+tick ud (VectorClock m) = VectorClock (M.insertWith (+) ud 1 m)
+
 newtype Content
     = Content Text
         deriving (Eq, Show, ToJSON, FromJSON, ToSchema)
@@ -128,3 +138,24 @@ data Written
     = Clean
     | Conflicted
         deriving (Eq, Show)
+
+-- | The outcome of deleting a topic, moving its notes elsewhere.
+-- A conflict carries whatever the caller can show for it: nothing
+-- from the store itself, the stored topic once it has been loaded.
+data TopicDeletion a
+    = TopicDeleted
+    | TopicConflicted !a
+    | TopicRefused !TopicRefusal
+        deriving (Eq, Show, Functor)
+
+-- | Why a topic delete was refused outright, whatever its clock.
+data TopicRefusal
+    = NoSuchDestination
+      -- ^ The notes' destination doesn't exist, or is the topic itself.
+    | SharedWithNotes
+      -- ^ The topic still has notes and more than one user has it.
+        deriving (Eq, Show, Generic)
+
+instance ToJSON   TopicRefusal
+instance FromJSON TopicRefusal
+instance ToSchema TopicRefusal

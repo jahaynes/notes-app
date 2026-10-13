@@ -1,5 +1,6 @@
 module NotesApp ( addTopic
                 , delete
+                , deleteTopicFor
                 , load
                 , notesFor
                 , store
@@ -80,3 +81,21 @@ storeTopicFor userId deviceId topicId mVc name mDescription = do
 
         Conflicted ->
             loadTopic topicId
+
+deleteTopicFor :: (NoteStore m, Clock m)
+               => UserId -> DeviceId -> TopicId -> VectorClock -> TopicId
+               -> m (TopicDeletion Topic)
+deleteTopicFor userId deviceId topicId vectorClock destination = do
+
+    updatedAt <- now
+
+    deleteTopic (UserDevice userId deviceId) updatedAt topicId vectorClock destination >>= \case
+
+        TopicDeleted ->
+            pure TopicDeleted
+
+        TopicConflicted () ->
+            maybe TopicDeleted TopicConflicted <$> loadTopic topicId
+
+        TopicRefused refusal ->
+            pure (TopicRefused refusal)

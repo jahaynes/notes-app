@@ -6,6 +6,7 @@
 {-# LANGUAGE TypeOperators         #-}
 
 module Controller ( DeleteRequest (..)
+                  , DeleteTopicRequest (..)
                   , NotesAPI
                   , NoteView (..)
                   , StoreRequest (..)
@@ -34,7 +35,7 @@ import           Servant.Swagger.UI          (SwaggerSchemaUI, swaggerSchemaUISe
 
 type NotesAPI =
          "note" :> Capture "noteId" NoteId :> (LoadNote :<|> StoreNote :<|> DeleteNote)
-    :<|> "topic" :> Capture "topicId" TopicId :> StoreTopic
+    :<|> "topic" :> Capture "topicId" TopicId :> (StoreTopic :<|> DeleteTopic)
     :<|> "topic" :> Capture "topicId" TopicId :> "notes" :> NotesForTopic
     :<|> "user" :> Capture "userId" UserId :> "topics" :> TopicsForUser
     :<|> "user" :> Capture "userId" UserId :> "topics" :> Capture "topicId" TopicId :> AddTopic
@@ -61,6 +62,13 @@ type StoreTopic =
         :> UVerb 'PUT '[JSON] '[ WithStatus 204 NoContent
                                , WithStatus 409 TopicView
                                ]
+
+type DeleteTopic =
+    ReqBody '[JSON] DeleteTopicRequest
+        :> UVerb 'DELETE '[JSON] '[ WithStatus 204 NoContent
+                                  , WithStatus 409 TopicView
+                                  , WithStatus 422 TopicRefusal
+                                  ]
 
 type NotesForTopic =
     Get '[JSON] [NoteView]
@@ -137,6 +145,17 @@ instance ToJSON   StoreTopicRequest
 instance FromJSON StoreTopicRequest
 instance ToSchema StoreTopicRequest
 
+data DeleteTopicRequest =
+    DeleteTopicRequest { userId      :: !UserId
+                       , deviceId    :: !DeviceId
+                       , clock       :: !VectorClock
+                       , moveNotesTo :: !TopicId
+                       } deriving (Eq, Show, Generic)
+
+instance ToJSON   DeleteTopicRequest
+instance FromJSON DeleteTopicRequest
+instance ToSchema DeleteTopicRequest
+
 -- TO fix - orphan instance
 instance ToSchema NoContent where
     declareNamedSchema _ = pure (NamedSchema Nothing mempty)
@@ -157,7 +176,7 @@ app runStore =
 
 notesServer :: (NoteStore m, Log m, Clock m) => ServerT NotesAPI m
 notesServer = (\nid -> loadHandler nid :<|> storeHandler nid :<|> deleteHandler nid)
-    :<|> storeTopicHandler
+    :<|> (\tid -> storeTopicHandler tid :<|> deleteTopicHandler tid)
     :<|> notesForTopicHandler
     :<|> topicsForUserHandler
     :<|> addTopicHandler
@@ -186,6 +205,13 @@ storeTopicHandler tid (StoreTopicRequest uid did mVc n d) =
         Nothing    -> respond (WithStatus @204 NoContent)
         Just topic -> respond (WithStatus @409 (toTopicView topic))
 
+deleteTopicHandler :: (NoteStore m, Clock m) => TopicId -> ServerT DeleteTopic m
+deleteTopicHandler tid (DeleteTopicRequest uid did vc dest) =
+    deleteTopicFor uid did tid vc dest >>= \case
+        TopicDeleted          -> respond (WithStatus @204 NoContent)
+        TopicConflicted topic -> respond (WithStatus @409 (toTopicView topic))
+        TopicRefused refusal  -> respond (WithStatus @422 refusal)
+
 notesForTopicHandler :: NoteStore m => TopicId -> ServerT NotesForTopic m
 notesForTopicHandler tid = map toView . V.toList <$> notesFor tid
 
@@ -203,7 +229,10 @@ notesOpenApi =
         & info . OpenApi.description ?~ "PUT returns 204 on a clean write, \
                                 \or 409 with the stored note on a vector clock conflict. \
                                 \DELETE likewise returns 204 once the note is gone \
-                                \(including if it never existed), or 409 with the stored note."
+                                \(including if it never existed), or 409 with the stored note. \
+                                \Deleting a topic moves its notes to moveNotesTo, or returns 422 with \
+                                \NoSuchDestination if that topic doesn't exist or is the one being deleted, \
+                                \or SharedWithNotes if the topic still has notes and more than one user."
 
 localCors :: CorsResourcePolicy
 localCors =
