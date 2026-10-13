@@ -23,22 +23,32 @@ import Types
 import           Control.Lens                ((&), (.~), (?~))
 import           Control.Monad.IO.Class      (liftIO)
 import           Data.Aeson                  (FromJSON, ToJSON)
-import           Data.OpenApi                (NamedSchema (..), OpenApi, ToSchema (..), description, info, version)
+import           Data.OpenApi                (NamedSchema (..), OpenApi, Tag (..), ToSchema (..), applyTagsFor,
+                                              info, version)
 import qualified Data.OpenApi as OpenApi
 import           Data.Time                   (UTCTime)
 import qualified Data.Vector as V
 import           GHC.Generics                (Generic)
 import           Network.Wai.Middleware.Cors (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
 import           Servant
-import           Servant.OpenApi             (toOpenApi)
+import           Servant.OpenApi             (subOperations, toOpenApi)
 import           Servant.Swagger.UI          (SwaggerSchemaUI, swaggerSchemaUIServer)
 
 type NotesAPI =
-         "note" :> Capture "noteId" NoteId :> (LoadNote :<|> StoreNote :<|> DeleteNote)
-    :<|> "topic" :> Capture "topicId" TopicId :> (StoreTopic :<|> DeleteTopic)
-    :<|> "topic" :> Capture "topicId" TopicId :> "notes" :> NotesForTopic
-    :<|> "user" :> Capture "userId" UserId :> "topics" :> TopicsForUser
+         UserAPI
+    :<|> TopicAPI
+    :<|> NoteAPI
+
+type UserAPI =
+         "user" :> Capture "userId" UserId :> "topics" :> TopicsForUser
     :<|> "user" :> Capture "userId" UserId :> "topics" :> Capture "topicId" TopicId :> AddTopic
+
+type TopicAPI =
+         "topic" :> Capture "topicId" TopicId :> (StoreTopic :<|> DeleteTopic)
+    :<|> "topic" :> Capture "topicId" TopicId :> "notes" :> NotesForTopic
+
+type NoteAPI =
+    "note" :> Capture "noteId" NoteId :> (LoadNote :<|> StoreNote :<|> DeleteNote)
 
 type LoadNote =
     UVerb 'GET '[JSON] '[ WithStatus 200 NoteView
@@ -175,11 +185,17 @@ app runStore =
             :<|> hoistServer (Proxy @NotesAPI) (liftIO . runStore) notesServer
 
 notesServer :: (NoteStore m, Log m, Clock m) => ServerT NotesAPI m
-notesServer = (\nid -> loadHandler nid :<|> storeHandler nid :<|> deleteHandler nid)
-    :<|> (\tid -> storeTopicHandler tid :<|> deleteTopicHandler tid)
+notesServer = userServer :<|> topicServer :<|> noteServer
+
+userServer :: NoteStore m => ServerT UserAPI m
+userServer = topicsForUserHandler :<|> addTopicHandler
+
+topicServer :: (NoteStore m, Clock m) => ServerT TopicAPI m
+topicServer = (\tid -> storeTopicHandler tid :<|> deleteTopicHandler tid)
     :<|> notesForTopicHandler
-    :<|> topicsForUserHandler
-    :<|> addTopicHandler
+
+noteServer :: (NoteStore m, Clock m) => ServerT NoteAPI m
+noteServer = \nid -> loadHandler nid :<|> storeHandler nid :<|> deleteHandler nid
 
 loadHandler :: NoteStore m => NoteId -> ServerT LoadNote m
 loadHandler nid =
@@ -224,6 +240,12 @@ addTopicHandler uid tid = NoContent <$ addTopic uid tid
 notesOpenApi :: OpenApi
 notesOpenApi =
     toOpenApi (Proxy @NotesAPI)
+        & applyTagsFor (subOperations (Proxy @UserAPI)  (Proxy @NotesAPI))
+                       [Tag "user"  (Just "The topics each user has") Nothing]
+        & applyTagsFor (subOperations (Proxy @TopicAPI) (Proxy @NotesAPI))
+                       [Tag "topic" (Just "Topics, and the notes in them") Nothing]
+        & applyTagsFor (subOperations (Proxy @NoteAPI)  (Proxy @NotesAPI))
+                       [Tag "note"  (Just "Individual notes") Nothing]
         & info . OpenApi.title .~ "Notes API"
         & info . version     .~ "0.1.0.0"
         & info . OpenApi.description ?~ "PUT returns 204 on a clean write, \
