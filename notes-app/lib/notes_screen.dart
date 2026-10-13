@@ -145,12 +145,29 @@ class _NotesScreenState extends State<NotesScreen> {
       ),
     );
     if (confirmed != true) return;
-    store.dispatch(DeleteTopics(ids));
+    final deleting = store.dispatch(DeleteTopics(ids));
     setState(() {
       _selectedTopics.clear();
       // If the shown topic went, follow its notes to the default topic.
       if (ids.contains(_topicId)) _topicId = store.defaultTopic.id;
     });
+    try {
+      await deleting;
+    } on SharedTopicsNotDeleted catch (e) {
+      if (!mounted) return;
+      final kept = e.topics;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            kept.length == 1
+                ? '"${kept.single.name}" is shared and still has notes, '
+                      'so it wasn\'t deleted.'
+                : '${kept.length} topics are shared and still have notes, '
+                      'so they weren\'t deleted.',
+          ),
+        ),
+      );
+    }
   }
 
   void _stopSearching() {

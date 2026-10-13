@@ -32,9 +32,8 @@ class NotesApiException implements Exception {
 /// This device's id lives in SharedPreferences, as does the user unless
 /// one is passed to [open].
 ///
-/// The backend can't remove topics yet, so [DeleteTopics] only changes what
-/// this store holds in memory, and the deleted topics come back the next
-/// time it's opened. Notes moved out of them do stay moved.
+/// Deleting a topic is sent straight away rather than held back, and the
+/// backend moves the topic's notes itself.
 class HttpNoteStore extends NoteStore {
   HttpNoteStore._(
     this._client,
@@ -44,6 +43,7 @@ class HttpNoteStore extends NoteStore {
     List<Topic> topics,
     List<Note> notes,
     this._clocks,
+    this._topicClocks,
   ) : _topics = ValueNotifier(topics),
       _notes = ValueNotifier(notes),
       _synced = {for (final n in notes) n.id: n};
@@ -70,15 +70,28 @@ class HttpNoteStore extends NoteStore {
       await prefs.setString(_deviceKey, deviceId);
     }
 
-    final serverTopics = await _getTopics(client, baseUri, user.id);
-    final serverDefault = serverTopics
+    final topicViews = await _getTopics(client, baseUri, user.id);
+    final serverTopics = [for (final json in topicViews) _topicFromView(json)];
+    final topicClocks = {
+      for (final json in topicViews)
+        json['topicId'] as String: _clockFrom(json),
+    };
+    var defaultTopic = serverTopics
         .where((t) => t.id == user.defaultTopic.id)
         .firstOrNull;
-    if (serverDefault == null) {
-      await _putTopic(client, baseUri, user.id, deviceId, user.defaultTopic);
+    if (defaultTopic == null) {
+      final stored = await _putTopic(
+        client,
+        baseUri,
+        user.id,
+        deviceId,
+        user.defaultTopic,
+      );
+      defaultTopic = stored.topic;
+      topicClocks[defaultTopic.id] = stored.clock;
     }
     final topics = List<Topic>.unmodifiable([
-      serverDefault ?? user.defaultTopic,
+      defaultTopic,
       for (final t in serverTopics)
         if (t.id != user.defaultTopic.id) t,
     ]);
@@ -99,6 +112,7 @@ class HttpNoteStore extends NoteStore {
       topics,
       _sorted(notes),
       clocks,
+      topicClocks,
     );
   }
 
@@ -115,8 +129,10 @@ class HttpNoteStore extends NoteStore {
   @override
   final User user;
 
-  /// The vector clock of each note as last written or read.
+  /// The vector clock of each note, and of each topic, as last written or
+  /// read.
   final Map<String, Map<String, int>> _clocks;
+  final Map<String, Map<String, int>> _topicClocks;
 
   /// Each note as the backend last confirmed it, by id. A note that differs
   /// from its entry here has changes the backend hasn't seen yet.
@@ -125,8 +141,8 @@ class HttpNoteStore extends NoteStore {
   /// Writes waiting out [_writeDelay] before they're sent, by note id.
   final _unsent = <String, _Unsent>{};
 
-  /// Ids of the topics deleted here, which the backend still has.
-  final _deletedTopics = <String>{};
+  /// Ids of the topics deleted here that the backend hasn't answered for.
+  final _deletingTopics = <String>{};
 
   final ValueNotifier<List<Note>> _notes;
   final ValueNotifier<List<Topic>> _topics;
@@ -184,25 +200,123 @@ class HttpNoteStore extends NoteStore {
             _deviceId,
             topic,
           );
-          if (stored == null) return;
+          _topicClocks[topic.id] = stored.clock;
+          if (stored.topic == topic) return;
           _topics.value = List.unmodifiable([
-            for (final t in _topics.value) t.id == stored.id ? stored : t,
+            for (final t in _topics.value)
+              t.id == topic.id ? stored.topic : t,
           ]);
         });
       case DeleteTopics(:final ids):
         final idSet = ids.toSet()..remove(defaultTopic.id);
-        if (idSet.isEmpty) return;
-        _deletedTopics.addAll(idSet);
+        final deleted = [
+          for (final t in _topics.value)
+            if (idSet.contains(t.id)) t,
+        ];
+        if (deleted.isEmpty) return;
+        _deletingTopics.addAll(idSet);
         _topics.value = List.unmodifiable([
           for (final t in _topics.value)
             if (!idSet.contains(t.id)) t,
         ]);
-        await _saveNotes([
+        // The backend moves the notes itself, so only writes already waiting
+        // need to follow them.
+        final moved = <String, Set<String>>{};
+        _notes.value = _sorted([
           for (final n in _notes.value)
-            if (idSet.contains(n.topicId)) n.copyWith(topicId: defaultTopic.id),
+            if (idSet.contains(n.topicId))
+              _moveNote(n, defaultTopic.id, moved.putIfAbsent(n.topicId, () => {}))
+            else
+              n,
         ]);
+        final shared = await Future.wait([
+          for (final t in deleted)
+            _enqueue(() => _deleteTopic(t, moved[t.id] ?? const {})),
+        ]);
+        final refused = [
+          for (final (i, t) in deleted.indexed)
+            if (shared[i]) t,
+        ];
+        if (refused.isNotEmpty) throw SharedTopicsNotDeleted(refused);
     }
   }
+
+  /// [note] moved into the topic [topicId], with any write waiting for it
+  /// moved along too. Adds its id to [moved].
+  Note _moveNote(Note note, String topicId, Set<String> moved) {
+    final next = note.copyWith(topicId: topicId);
+    moved.add(note.id);
+    if (_unsent[note.id]?.write is _Put) _write(note.id, _Put(next));
+    return next;
+  }
+
+  /// Deletes [topic] from the backend, which moves its notes to the default
+  /// topic as [dispatch] already has here for the notes [moved]. If the
+  /// backend keeps the topic, it comes back here with those notes, and this
+  /// returns whether that was because it's shared and still has notes.
+  Future<bool> _deleteTopic(Topic topic, Set<String> moved) async {
+    final path = 'topic/${topic.id}';
+    final http.Response response;
+    try {
+      response = await _client.delete(
+        _baseUri.resolve(path),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'userId': user.id,
+          'deviceId': _deviceId,
+          'clock': _topicClocks[topic.id] ?? const <String, int>{},
+          'moveNotesTo': defaultTopic.id,
+        }),
+      );
+    } finally {
+      _deletingTopics.remove(topic.id);
+    }
+    switch (response.statusCode) {
+      case 204:
+        _topicClocks.remove(topic.id);
+        // Follow the backend, which moved every note it had in the topic and
+        // ticked this device's entry in each one's clock.
+        for (final MapEntry(key: id, value: note) in _synced.entries.toList()) {
+          if (note.topicId != topic.id) continue;
+          _synced[id] = note.copyWith(topicId: defaultTopic.id);
+          _clocks[id] = _ticked(_clocks[id] ?? const {});
+        }
+        return false;
+      case 409:
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        _topicClocks[topic.id] = _clockFrom(json);
+        _restoreTopic(_topicFromView(json), moved);
+        return false;
+      case 422 when jsonDecode(response.body) == 'SharedWithNotes':
+        _restoreTopic(topic, moved);
+        return true;
+      default:
+        throw NotesApiException(
+          'DELETE $path',
+          response.statusCode,
+          response.body,
+        );
+    }
+  }
+
+  /// Puts back [topic] after the backend kept it, along with the notes
+  /// [moved] out of it that are still in the default topic.
+  void _restoreTopic(Topic topic, Set<String> moved) {
+    _topics.value = List.unmodifiable([..._topics.value, topic]);
+    _notes.value = _sorted([
+      for (final n in _notes.value)
+        if (moved.contains(n.id) && n.topicId == defaultTopic.id)
+          _moveNote(n, topic.id, {})
+        else
+          n,
+    ]);
+  }
+
+  /// [clock] with this device's entry advanced, as a write from it would.
+  Map<String, int> _ticked(Map<String, int> clock) => {
+    ...clock,
+    _clockKey: (clock[_clockKey] ?? 0) + 1,
+  };
 
   @override
   Future<void> flush() {
@@ -238,10 +352,13 @@ class HttpNoteStore extends NoteStore {
       );
       return;
     }
-    final fetched = {
-      for (final t in await _getTopics(_client, _baseUri, user.id))
-        if (!_deletedTopics.contains(t.id)) t.id: t,
-    };
+    final fetched = <String, Topic>{};
+    for (final json in await _getTopics(_client, _baseUri, user.id)) {
+      final topic = _topicFromView(json);
+      if (_deletingTopics.contains(topic.id)) continue;
+      fetched[topic.id] = topic;
+      _topicClocks[topic.id] = _clockFrom(json);
+    }
     final known = {for (final t in _topics.value) t.id};
     _topics.value = List.unmodifiable([
       for (final t in _topics.value) fetched[t.id] ?? t,
@@ -356,8 +473,7 @@ class HttpNoteStore extends NoteStore {
   /// Writes [note] with this device's clock entry bumped. On a conflict the
   /// backend keeps its copy and returns it, and that copy replaces ours.
   Future<void> _putNote(Note note) async {
-    final clock = {..._clocks[note.id] ?? const <String, int>{}};
-    clock[_clockKey] = (clock[_clockKey] ?? 0) + 1;
+    final clock = _ticked(_clocks[note.id] ?? const {});
     final path = 'note/${note.id}';
     final response = await _client.put(
       _baseUri.resolve(path),
@@ -440,10 +556,10 @@ class HttpNoteStore extends NoteStore {
 
   /// Runs [request] once every earlier one has finished, so writes reach the
   /// backend in order and each sees the clock the one before it left.
-  Future<void> _enqueue(Future<void> Function() request) {
+  Future<T> _enqueue<T>(Future<T> Function() request) {
     final result = _pending.then((_) => request());
     // A failed request mustn't stop the ones after it.
-    _pending = result.catchError((_) {});
+    _pending = result.then<void>((_) {}, onError: (_) {});
     return result;
   }
 
@@ -460,20 +576,17 @@ class HttpNoteStore extends NoteStore {
     return jsonDecode(response.body);
   }
 
-  /// The user's topics, oldest first as a stand-in for the order they were
-  /// added.
-  static Future<List<Topic>> _getTopics(
+  /// The TopicViews of the user's topics, oldest first as a stand-in for the
+  /// order they were added.
+  static Future<List<Map<String, dynamic>>> _getTopics(
     http.Client client,
     Uri baseUri,
     String userId,
-  ) async {
-    final views = [
-      for (final view in await _get(client, baseUri, 'user/$userId/topics')
-          as List)
-        view as Map<String, dynamic>,
-    ]..sort((a, b) => _updatedAt(a).compareTo(_updatedAt(b)));
-    return [for (final json in views) _topicFromView(json)];
-  }
+  ) async => [
+    for (final view in await _get(client, baseUri, 'user/$userId/topics')
+        as List)
+      view as Map<String, dynamic>,
+  ]..sort((a, b) => _updatedAt(a).compareTo(_updatedAt(b)));
 
   /// The NoteViews of the notes in the topic [topicId].
   static Future<List<Map<String, dynamic>>> _getNotes(
@@ -486,10 +599,10 @@ class HttpNoteStore extends NoteStore {
       view as Map<String, dynamic>,
   ];
 
-  /// Creates [topic] and adds it to the user's topics. Returns null if it
-  /// was written, or the backend's copy if a topic with that id already
-  /// exists there.
-  static Future<Topic?> _putTopic(
+  /// Creates [topic] and adds it to the user's topics. Returns the topic as
+  /// the backend now has it, which is its own copy if a topic with that id
+  /// already existed there, and its clock.
+  static Future<({Topic topic, Map<String, int> clock})> _putTopic(
     http.Client client,
     Uri baseUri,
     String userId,
@@ -507,12 +620,13 @@ class HttpNoteStore extends NoteStore {
       }),
     );
     switch (response.statusCode) {
+      // Written without a clock, which the backend starts at zero for this
+      // device.
       case 204:
-        return null;
+        return (topic: topic, clock: {'$userId:$deviceId': 0});
       case 409:
-        return _topicFromView(
-          jsonDecode(response.body) as Map<String, dynamic>,
-        );
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        return (topic: _topicFromView(json), clock: _clockFrom(json));
       default:
         throw NotesApiException(
           'PUT $path',

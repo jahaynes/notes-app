@@ -11,12 +11,28 @@ import 'package:shared_preferences/shared_preferences.dart';
 const _user = 'user-1';
 
 /// A Notes API that accepts every PUT, holding NoteViews and TopicViews. A
-/// DELETE goes through only if its clock has seen every write to the note.
+/// DELETE goes through only if its clock has seen every write to the note or
+/// topic, and a topic DELETE is refused as the real one refuses it.
 class _Backend {
   final notes = <String, Map<String, dynamic>>{};
   final topics = <String, Map<String, dynamic>>{};
   final notePuts = <Map<String, dynamic>>[];
   final noteDeletes = <String>[];
+
+  /// Ids of the topics other users have too.
+  final sharedTopics = <String>{};
+
+  /// Stores a topic as if another device had written it.
+  void topicElsewhere(String id, {required String name}) {
+    topics[id] = {
+      'topicId': id,
+      'clock': {
+        '$_user:other': (topics[id]?['clock']?['$_user:other'] ?? 0) + 1,
+      },
+      'name': name,
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    };
+  }
 
   /// Stores a note as if another device had written it.
   void putElsewhere(String id, {required String title, String topic = _user}) {
@@ -49,7 +65,7 @@ class _Backend {
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         topics[id] = {
           'topicId': id,
-          'clock': <String, int>{},
+          'clock': {'${body['userId']}:${body['deviceId']}': 0},
           'name': body['name'],
           'updatedAt': DateTime.now().toUtc().toIso8601String(),
         };
@@ -72,17 +88,48 @@ class _Backend {
         noteDeletes.add(id);
         final incoming = (jsonDecode(request.body) as Map)['clock'] as Map;
         final stored = notes[id];
-        if (stored != null &&
-            (stored['clock'] as Map).entries.any(
-              (e) => ((incoming[e.key] ?? -1) as int) < (e.value as int),
-            )) {
+        if (stored != null && !_hasSeen(incoming, stored)) {
           return _json(stored, status: 409);
         }
         notes.remove(id);
         return http.Response('', 204);
+      case ('DELETE', ['topic', final id]):
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final dest = body['moveNotesTo'] as String;
+        final inTopic = [
+          for (final n in notes.values)
+            if (n['topicId'] == id) n,
+        ];
+        if (dest == id || !topics.containsKey(dest)) {
+          return _json('NoSuchDestination', status: 422);
+        }
+        if (sharedTopics.contains(id) && inTopic.isNotEmpty) {
+          return _json('SharedWithNotes', status: 422);
+        }
+        final stored = topics[id];
+        if (stored != null && !_hasSeen(body['clock'] as Map, stored)) {
+          return _json(stored, status: 409);
+        }
+        final device = '${body['userId']}:${body['deviceId']}';
+        for (final n in inTopic) {
+          final clock = {...n['clock'] as Map};
+          clock[device] = ((clock[device] ?? 0) as int) + 1;
+          n
+            ..['topicId'] = dest
+            ..['clock'] = clock
+            ..['updatedAt'] = DateTime.now().toUtc().toIso8601String();
+        }
+        topics.remove(id);
+        return http.Response('', 204);
     }
     return http.Response('', 404);
   });
+
+  /// Whether [clock] has seen every write in the [stored] view's clock.
+  static bool _hasSeen(Map clock, Map stored) =>
+      (stored['clock'] as Map).entries.every(
+        (e) => ((clock[e.key] ?? -1) as int) >= (e.value as int),
+      );
 
   static http.Response _json(Object body, {int status = 200}) => http.Response(
     jsonEncode(body),
@@ -242,5 +289,79 @@ void main() {
     expect(store.byId('a')?.title, 'changed');
     expect(store.lastDeleted.value, isEmpty);
     expect(backend.notes['a']?['title'], 'changed');
+  });
+
+  test('deleting a topic lets the backend move its notes', () async {
+    final backend = _Backend()
+      ..topicElsewhere('work', name: 'Work')
+      ..putElsewhere('a', title: 'A', topic: 'work');
+    final store = await _open(backend);
+    await store.dispatch(const DeleteTopics(['work']));
+
+    expect(store.topics.value.map((t) => t.id), [_user]);
+    expect(store.byId('a')?.topicId, _user);
+    expect(backend.topics.keys, [_user]);
+    expect(backend.notes['a']?['topicId'], _user);
+    expect(backend.notePuts, isEmpty);
+
+    // The next write carries on from the clock the backend ticked.
+    final device =
+        '$_user:${(await SharedPreferences.getInstance()).getString('device_v1')}';
+    final ticked = {...backend.notes['a']!['clock'] as Map};
+    expect(ticked[device], 1);
+    await store.dispatch(SaveNote(store.byId('a')!.copyWith(title: 'A2')));
+    expect(backend.notePuts.single['clock'], {...ticked, device: 2});
+    await store.refreshTopic(null);
+    expect(store.byId('a')?.title, 'A2');
+  });
+
+  test('a waiting edit to a note follows it out of a deleted topic', () async {
+    final backend = _Backend()
+      ..topicElsewhere('work', name: 'Work')
+      ..putElsewhere('a', title: 'A', topic: 'work');
+    final store = await _open(backend);
+    final edit = store.dispatch(
+      SaveNote(store.byId('a')!.copyWith(title: 'A2')),
+    );
+    await store.dispatch(const DeleteTopics(['work']));
+    await edit;
+    expect(backend.notes['a']?['topicId'], _user);
+    expect(backend.notes['a']?['title'], 'A2');
+  });
+
+  test('a topic changed elsewhere comes back with its notes', () async {
+    final backend = _Backend()
+      ..topicElsewhere('work', name: 'Work')
+      ..putElsewhere('a', title: 'A', topic: 'work');
+    final store = await _open(backend);
+    backend.topicElsewhere('work', name: 'Renamed');
+    await store.dispatch(const DeleteTopics(['work']));
+
+    expect(store.topics.value.map((t) => t.name), ['Uncategorised', 'Renamed']);
+    expect(store.byId('a')?.topicId, 'work');
+    expect(backend.notes['a']?['topicId'], 'work');
+    expect(backend.notePuts, isEmpty);
+  });
+
+  test('a shared topic with notes is kept, and says why', () async {
+    final backend = _Backend()
+      ..topicElsewhere('work', name: 'Work')
+      ..putElsewhere('a', title: 'A', topic: 'work');
+    backend.sharedTopics.add('work');
+    final store = await _open(backend);
+
+    await expectLater(
+      store.dispatch(const DeleteTopics(['work'])),
+      throwsA(
+        isA<SharedTopicsNotDeleted>().having(
+          (e) => e.topics.map((t) => t.id),
+          'topics',
+          ['work'],
+        ),
+      ),
+    );
+    expect(store.topics.value.map((t) => t.id), [_user, 'work']);
+    expect(store.byId('a')?.topicId, 'work');
+    expect(backend.topics.keys, contains('work'));
   });
 }

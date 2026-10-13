@@ -47,11 +47,25 @@ final class AddTopic extends NoteAction {
 }
 
 /// Removes the topics with [ids], moving their notes to
-/// [NoteStore.defaultTopic], which can't itself be deleted.
+/// [NoteStore.defaultTopic], which can't itself be deleted. Dispatching it
+/// throws [SharedTopicsNotDeleted] if some of them can't be removed.
 final class DeleteTopics extends NoteAction {
   const DeleteTopics(this.ids);
 
   final Iterable<String> ids;
+}
+
+/// [DeleteTopics] couldn't remove [topics], as other users have them too
+/// and there are still notes in them. They're back where they were, with
+/// their notes.
+class SharedTopicsNotDeleted implements Exception {
+  SharedTopicsNotDeleted(this.topics);
+
+  final List<Topic> topics;
+
+  @override
+  String toString() =>
+      'SharedTopicsNotDeleted: ${topics.map((t) => t.name).join(', ')}';
 }
 
 /// Source of truth for notes. Actions flow in through [dispatch]; the
