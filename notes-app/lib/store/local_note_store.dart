@@ -99,6 +99,17 @@ class LocalNoteStore extends NoteStore {
     }
   }
 
+  // Every change is persisted as it's dispatched, and nothing else writes
+  // to these notes.
+  @override
+  Future<void> flush() async {}
+
+  @override
+  Future<void> refreshNote(String id) async {}
+
+  @override
+  Future<void> refreshTopic(String? topicId) async {}
+
   /// Inserts or replaces [notes] as described by [SaveNote].
   Future<void> _saveNotes(List<Note> notes) async {
     final ids = {for (final n in notes) n.id};

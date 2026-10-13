@@ -64,10 +64,17 @@ class _NoteishAppState extends State<NoteishApp> {
           ),
           GoRoute(
             path: 'note/:id',
-            redirect: (_, state) =>
-                widget.store.byId(state.pathParameters['id']!) == null
-                ? '/'
-                : null,
+            // Fetches the note first, as the editor works on the copy it
+            // opens with. Falls back to the copy held here if that fails.
+            redirect: (_, state) async {
+              final id = state.pathParameters['id']!;
+              try {
+                await widget.store.refreshNote(id);
+              } on Exception catch (e) {
+                debugPrint('Opening note $id without refreshing it: $e');
+              }
+              return widget.store.byId(id) == null ? '/' : null;
+            },
             builder: (_, state) => EditorScreen(
               store: widget.store,
               note: widget.store.byId(state.pathParameters['id']!)!,
@@ -78,8 +85,19 @@ class _NoteishAppState extends State<NoteishApp> {
     ],
   );
 
+  /// Sends held-back changes when the app is hidden, e.g. its tab is
+  /// switched away from or closed, as it may not get another chance.
+  late final AppLifecycleListener _lifecycle;
+
+  @override
+  void initState() {
+    super.initState();
+    _lifecycle = AppLifecycleListener(onHide: widget.store.flush);
+  }
+
   @override
   void dispose() {
+    _lifecycle.dispose();
     _router.dispose();
     super.dispose();
   }

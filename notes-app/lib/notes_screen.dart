@@ -276,12 +276,15 @@ class _NotesScreenState extends State<NotesScreen> {
         checkedTopicIds: _selectedTopics,
         onDropNotes: _moveNotes,
         onToggle: _toggleTopic,
-        onSelect: (id) => setState(() {
-          _topicId = id;
-          // Don't let notes that are no longer shown stay ticked.
-          _selectedNotes.clear();
-          _selectedTopics.clear();
-        }),
+        onSelect: (id) {
+          setState(() {
+            _topicId = id;
+            // Don't let notes that are no longer shown stay ticked.
+            _selectedNotes.clear();
+            _selectedTopics.clear();
+          });
+          store.refreshTopic(id);
+        },
       ),
       Expanded(
         child: ListenableBuilder(

@@ -79,6 +79,17 @@ abstract class NoteStore {
   /// Applies [action]. Completes once the change has been persisted.
   Future<void> dispatch(NoteAction action);
 
+  /// Persists every change that [dispatch] is still holding back.
+  Future<void> flush();
+
+  /// Brings the note [id] up to date with wherever else it's kept, keeping
+  /// any changes made here that haven't been persisted yet.
+  Future<void> refreshNote(String id);
+
+  /// Brings the notes in the topic [topicId] up to date as [refreshNote]
+  /// does, or every topic and note when [topicId] is null.
+  Future<void> refreshTopic(String? topicId);
+
   Note? byId(String id) => notes.value.where((n) => n.id == id).firstOrNull;
 
   /// Notes matching [query], limited to the topic [topicId] if given.

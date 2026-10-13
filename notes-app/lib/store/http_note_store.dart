@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -24,8 +25,9 @@ class NotesApiException implements Exception {
 }
 
 /// Keeps notes in the Notes API backend, with the latest state held in
-/// memory. Changes show up locally straight away and are sent to the backend
-/// one at a time, in the order they were dispatched.
+/// memory. Changes show up locally straight away. A changed note is sent to
+/// the backend once it's gone [_writeDelay] without changing again, and
+/// requests go one at a time, in the order they were sent.
 ///
 /// This device's id lives in SharedPreferences, as does the user unless
 /// one is passed to [open].
@@ -44,7 +46,8 @@ class HttpNoteStore extends NoteStore {
     List<Note> notes,
     this._clocks,
   ) : _topics = ValueNotifier(topics),
-      _notes = ValueNotifier(notes);
+      _notes = ValueNotifier(notes),
+      _synced = {for (final n in notes) n.id: n};
 
   /// Loads the user's topics and notes from the backend at [baseUri].
   ///
@@ -68,24 +71,7 @@ class HttpNoteStore extends NoteStore {
       await prefs.setString(_deviceKey, deviceId);
     }
 
-    Future<dynamic> get(String path) async {
-      final response = await client.get(baseUri.resolve(path));
-      if (response.statusCode != 200) {
-        throw NotesApiException(
-          'GET $path',
-          response.statusCode,
-          response.body,
-        );
-      }
-      return jsonDecode(response.body);
-    }
-
-    // Oldest first, as a stand-in for the order they were added.
-    final views = [
-      for (final view in await get('user/${user.id}/topics') as List)
-        view as Map<String, dynamic>,
-    ]..sort((a, b) => _updatedAt(a).compareTo(_updatedAt(b)));
-    final serverTopics = [for (final json in views) _topicFromView(json)];
+    final serverTopics = await _getTopics(client, baseUri, user.id);
     final serverDefault = serverTopics
         .where((t) => t.id == user.defaultTopic.id)
         .firstOrNull;
@@ -101,8 +87,7 @@ class HttpNoteStore extends NoteStore {
     final clocks = <String, Map<String, int>>{};
     final notes = <Note>[];
     for (final topicId in topics.map((t) => t.id)) {
-      for (final view in await get('topic/$topicId/notes') as List) {
-        final json = view as Map<String, dynamic>;
+      for (final json in await _getNotes(client, baseUri, topicId)) {
         notes.add(_fromView(json));
         clocks[json['noteId'] as String] = _clockFrom(json);
       }
@@ -120,6 +105,10 @@ class HttpNoteStore extends NoteStore {
 
   static const _deviceKey = 'device_v1';
 
+  /// How long a note must go unchanged before it's written, so that typing
+  /// sends a request per pause rather than per keystroke.
+  static const _writeDelay = Duration(milliseconds: 500);
+
   final http.Client _client;
   final Uri _baseUri;
   final String _deviceId;
@@ -129,6 +118,17 @@ class HttpNoteStore extends NoteStore {
 
   /// The vector clock of each note as last written or read.
   final Map<String, Map<String, int>> _clocks;
+
+  /// Each note as the backend last confirmed it, by id. A note that differs
+  /// from its entry here has changes the backend hasn't seen yet.
+  final Map<String, Note> _synced;
+
+  /// Notes waiting out [_writeDelay] before they're written, by id.
+  final _unsent = <String, _UnsentNote>{};
+
+  /// Ids of the notes and topics deleted here, which the backend still has.
+  final _deletedNotes = <String>{};
+  final _deletedTopics = <String>{};
 
   final ValueNotifier<List<Note>> _notes;
   final ValueNotifier<List<Topic>> _topics;
@@ -161,6 +161,10 @@ class HttpNoteStore extends NoteStore {
             if (idSet.contains(n.id)) n,
         ];
         if (deleted.isEmpty) return;
+        for (final n in deleted) {
+          _deletedNotes.add(n.id);
+          _discardWrite(n.id);
+        }
         _lastDeleted.value = List.unmodifiable(deleted);
         _notes.value = _sorted([
           for (final n in _notes.value)
@@ -193,6 +197,7 @@ class HttpNoteStore extends NoteStore {
       case DeleteTopics(:final ids):
         final idSet = ids.toSet()..remove(defaultTopic.id);
         if (idSet.isEmpty) return;
+        _deletedTopics.addAll(idSet);
         _topics.value = List.unmodifiable([
           for (final t in _topics.value)
             if (!idSet.contains(t.id)) t,
@@ -202,6 +207,91 @@ class HttpNoteStore extends NoteStore {
             if (idSet.contains(n.topicId)) n.copyWith(topicId: defaultTopic.id),
         ]);
     }
+  }
+
+  @override
+  Future<void> flush() {
+    final writes = [for (final u in _unsent.values) u.done.future];
+    _unsent.keys.toList().forEach(_send);
+    return Future.wait(writes);
+  }
+
+  @override
+  Future<void> refreshNote(String id) => _enqueue(() async {
+    final path = 'note/$id';
+    final response = await _client.get(_baseUri.resolve(path));
+    switch (response.statusCode) {
+      case 200:
+        _merge(
+          (n) => n.id == id,
+          [jsonDecode(response.body) as Map<String, dynamic>],
+        );
+      // Never written, so there's only the copy here.
+      case 404:
+        return;
+      default:
+        throw NotesApiException('GET $path', response.statusCode, response.body);
+    }
+  });
+
+  @override
+  Future<void> refreshTopic(String? topicId) => _enqueue(() async {
+    if (topicId != null) {
+      _merge(
+        (n) => n.topicId == topicId,
+        await _getNotes(_client, _baseUri, topicId),
+      );
+      return;
+    }
+    final fetched = {
+      for (final t in await _getTopics(_client, _baseUri, user.id))
+        if (!_deletedTopics.contains(t.id)) t.id: t,
+    };
+    final known = {for (final t in _topics.value) t.id};
+    _topics.value = List.unmodifiable([
+      for (final t in _topics.value) fetched[t.id] ?? t,
+      for (final t in fetched.values)
+        if (!known.contains(t.id)) t,
+    ]);
+    _merge((_) => true, [
+      for (final t in _topics.value)
+        ...await _getNotes(_client, _baseUri, t.id),
+    ]);
+  });
+
+  /// Replaces the notes picked out by [inScope] with [views], the backend's
+  /// copies of them. Notes with changes the backend hasn't seen yet are left
+  /// alone, as their writes will settle them, and notes deleted here stay
+  /// deleted. An unchanged note in scope that isn't in [views] has been moved
+  /// out of scope elsewhere, so it's dropped until its new scope is fetched.
+  ///
+  /// Only safe to call from a request run by [_enqueue], so that no write
+  /// sent earlier is still in flight.
+  void _merge(
+    bool Function(Note note) inScope,
+    Iterable<Map<String, dynamic>> views,
+  ) {
+    final fetched = {
+      for (final json in views)
+        if (!_deletedNotes.contains(json['noteId']))
+          json['noteId'] as String: json,
+    };
+    final next = <Note>[];
+    for (final note in _notes.value) {
+      if (_synced[note.id] != note) {
+        next.add(note);
+        fetched.remove(note.id);
+      } else if (!inScope(note) && !fetched.containsKey(note.id)) {
+        next.add(note);
+      }
+    }
+    for (final json in fetched.values) {
+      final note = _fromView(json);
+      next.add(note);
+      _synced[note.id] = note;
+      _clocks[note.id] = _clockFrom(json);
+    }
+    _notes.value = _sorted(next);
   }
 
   /// Inserts or replaces [notes] as described by [SaveNote], then writes the
@@ -222,12 +312,51 @@ class HttpNoteStore extends NoteStore {
               ? n
               : n.copyWith(topicId: defaultTopic.id),
     ];
+    for (final n in notes) {
+      if (n.isEmpty) {
+        _deletedNotes.add(n.id);
+        _discardWrite(n.id);
+      } else {
+        _deletedNotes.remove(n.id);
+      }
+    }
     _notes.value = _sorted([
       for (final n in _notes.value)
         if (!ids.contains(n.id)) n,
       ...saved,
     ]);
-    await Future.wait([for (final n in saved) _enqueue(() => _putNote(n))]);
+    await Future.wait([for (final n in saved) _write(n)]);
+  }
+
+  /// Writes [note] once it's gone [_writeDelay] without being written again,
+  /// replacing any earlier version still waiting. Completes when it has been.
+  Future<void> _write(Note note) {
+    final timer = Timer(_writeDelay, () => _send(note.id));
+    final unsent = _unsent[note.id];
+    if (unsent == null) {
+      return (_unsent[note.id] = _UnsentNote(note, timer)).done.future;
+    }
+    unsent
+      ..timer.cancel()
+      ..timer = timer
+      ..note = note;
+    return unsent.done.future;
+  }
+
+  /// Sends the write waiting for the note [id] without waiting any longer.
+  void _send(String id) {
+    final unsent = _unsent.remove(id);
+    if (unsent == null) return;
+    unsent.timer.cancel();
+    unsent.done.complete(_enqueue(() => _putNote(unsent.note)));
+  }
+
+  /// Drops the write waiting for the note [id], if there is one.
+  void _discardWrite(String id) {
+    final unsent = _unsent.remove(id);
+    if (unsent == null) return;
+    unsent.timer.cancel();
+    unsent.done.complete();
   }
 
   /// Writes [note] with this device's clock entry bumped. On a conflict the
@@ -253,10 +382,13 @@ class HttpNoteStore extends NoteStore {
     switch (response.statusCode) {
       case 204:
         _clocks[note.id] = clock;
+        _synced[note.id] = note;
       case 409:
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         _clocks[note.id] = _clockFrom(json);
         final stored = _fromView(json);
+        _synced[stored.id] = stored;
+        if (_deletedNotes.contains(stored.id)) return;
         _notes.value = _sorted([
           for (final n in _notes.value)
             if (n.id != stored.id) n,
@@ -279,6 +411,45 @@ class HttpNoteStore extends NoteStore {
     _pending = result.catchError((_) {});
     return result;
   }
+
+  /// GETs [path], which must answer 200 with JSON.
+  static Future<dynamic> _get(
+    http.Client client,
+    Uri baseUri,
+    String path,
+  ) async {
+    final response = await client.get(baseUri.resolve(path));
+    if (response.statusCode != 200) {
+      throw NotesApiException('GET $path', response.statusCode, response.body);
+    }
+    return jsonDecode(response.body);
+  }
+
+  /// The user's topics, oldest first as a stand-in for the order they were
+  /// added.
+  static Future<List<Topic>> _getTopics(
+    http.Client client,
+    Uri baseUri,
+    String userId,
+  ) async {
+    final views = [
+      for (final view in await _get(client, baseUri, 'user/$userId/topics')
+          as List)
+        view as Map<String, dynamic>,
+    ]..sort((a, b) => _updatedAt(a).compareTo(_updatedAt(b)));
+    return [for (final json in views) _topicFromView(json)];
+  }
+
+  /// The NoteViews of the notes in the topic [topicId].
+  static Future<List<Map<String, dynamic>>> _getNotes(
+    http.Client client,
+    Uri baseUri,
+    String topicId,
+  ) async => [
+    for (final view in await _get(client, baseUri, 'topic/$topicId/notes')
+        as List)
+      view as Map<String, dynamic>,
+  ];
 
   /// Creates [topic] and adds it to the user's topics. Returns null if it
   /// was written, or the backend's copy if a topic with that id already
@@ -340,4 +511,15 @@ class HttpNoteStore extends NoteStore {
   static List<Note> _sorted(List<Note> notes) => List.unmodifiable(
     notes..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)),
   );
+}
+
+/// A write held back by [HttpNoteStore._write] until [note] stops changing.
+class _UnsentNote {
+  _UnsentNote(this.note, this.timer);
+
+  Note note;
+  Timer timer;
+
+  /// Completes once [note], or whichever version replaces it, is written.
+  final done = Completer<void>();
 }

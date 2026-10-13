@@ -5,7 +5,8 @@ import 'note.dart';
 import 'store/note_store.dart';
 
 /// Edits a note, dispatching every change as it happens so that leaving by
-/// any route (app bar, system or browser back) keeps the edits.
+/// any route (app bar, system or browser back) keeps the edits. Leaving also
+/// flushes the store, so that changes it's holding back aren't kept waiting.
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key, required this.store, required this.note});
 
@@ -28,6 +29,7 @@ class _EditorScreenState extends State<EditorScreen> {
   void dispose() {
     _title.dispose();
     _body.dispose();
+    widget.store.flush();
     super.dispose();
   }
 
