@@ -1,5 +1,4 @@
 {-# LANGUAGE DataKinds             #-}
-{-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeOperators         #-}
 
@@ -7,44 +6,18 @@ module Controller.OpenApi where
 
 import Controller.Routes
 
-import           Control.Lens                     ((&), (.~), (<>~), (?~), at)
+import           Control.Lens                     ((&), (.~), (?~))
 import           Data.Aeson                       (Encoding, ToJSON (..), Value (..), pairs)
 import qualified Data.Aeson.Encoding as E
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
-import qualified Data.HashMap.Strict.InsOrd.Compat as InsOrd
-import           Data.OpenApi                     (NamedSchema (..), OAuth2Flow (..),
-                                                   OAuth2Flows (..), OAuth2PasswordFlow (..), OpenApi,
-                                                   Referenced (..), SecurityDefinitions (..),
-                                                   SecurityRequirement (..), SecurityScheme (..),
-                                                   SecuritySchemeType (..), Tag (..), ToSchema (..),
-                                                   allOperations, applyTagsFor, components,
-                                                   info,
-                                                   responses, security, securitySchemes, version)
+import           Data.OpenApi                     (OpenApi, Tag (..), applyTagsFor, info, version)
 import qualified Data.OpenApi as OpenApi
 import           Data.List                        (elemIndex, sortOn)
 import           Data.Maybe                       (fromMaybe)
 import qualified Data.Vector as V
 import           Servant
 import           Servant.OpenApi                  (HasOpenApi (..), subOperations)
-
--- TO fix - orphan instance
-instance HasOpenApi api => HasOpenApi (AuthProtect "jwt" :> api) where
-    toOpenApi _ =
-        toOpenApi (Proxy @api)
-            & components . securitySchemes <>~ SecurityDefinitions (InsOrd.singleton "login" loginScheme)
-            & allOperations . security .~ [SecurityRequirement (InsOrd.singleton "login" [])]
-            & allOperations . responses . at 401 ?~ Inline (mempty & OpenApi.description .~ "Missing, invalid or expired token")
-
-loginScheme :: SecurityScheme
-loginScheme =
-    SecurityScheme
-        (SecuritySchemeOAuth2 (mempty { _oAuth2FlowsPassword = Just (OAuth2Flow (OAuth2PasswordFlow "/login") Nothing mempty) }))
-        (Just "Log in with a username and password, sending the token as a Bearer header")
-
--- TO fix - orphan instance
-instance ToSchema NoContent where
-    declareNamedSchema _ = pure (NamedSchema Nothing mempty)
 
 notesOpenApi :: OpenApi
 notesOpenApi =

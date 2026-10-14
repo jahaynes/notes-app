@@ -1,16 +1,28 @@
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
 module Controller.ControllerTypes where
 
 import Types
 
 import           Data.Aeson                       (FromJSON, Options (..), ToJSON (..), camelTo2, defaultOptions, genericToJSON)
-import           Data.OpenApi                     (ToSchema (..), fromAesonOptions, genericDeclareNamedSchema)
+import           Data.OpenApi                     (NamedSchema (..), ToSchema (..), fromAesonOptions, genericDeclareNamedSchema)
 import           Data.Text                        (Text)
 import           Data.Time                        (UTCTime)
 import           GHC.Generics                     (Generic)
+import           Servant                          (JSON, MimeRender (..))
 import           Web.FormUrlEncoded               (FromForm)
+
+-- An empty response body. Stands in for servant's NoContent in UVerb responses,
+-- which need a ToSchema instance we can't give NoContent without an orphan
+data NoBody = NoBody
+
+instance MimeRender JSON NoBody where
+    mimeRender _ _ = ""
+
+instance ToSchema NoBody where
+    declareNamedSchema _ = pure (NamedSchema Nothing mempty)
 
 data CreateUserRequest =
     CreateUserRequest { username :: !Username

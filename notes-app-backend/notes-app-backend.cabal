@@ -48,6 +48,7 @@ library
     import:           common
     exposed-modules:  Auth.Password
                       Auth.Token
+                      Controller.Auth
                       Controller.Controller
                       Controller.ControllerTypes
                       Controller.OpenApi

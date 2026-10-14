@@ -1,6 +1,5 @@
 {-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE RankNTypes            #-}
-{-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeOperators         #-}
 
@@ -24,14 +23,12 @@ import qualified Data.Vector as V
 import           Network.Wai                      (Request, requestHeaders)
 import           Network.Wai.Middleware.Cors      (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
 import           Servant
-import           Servant.Server.Experimental.Auth (AuthHandler, AuthServerData, mkAuthHandler)
+import           Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import           Servant.Swagger.UI               (SwaggerSchemaUI', swaggerSchemaUIServer')
 
 type ApiWithSwagger =
          SwaggerSchemaUI' "swagger-ui" ("openapi.json" :> Get '[JSON] OrderedSpec)
     :<|> NotesAPI
-
-type instance AuthServerData (AuthProtect "jwt") = UserId
 
 app :: (NoteStore m, UserStore m, Fresh m, Log m, Clock m)
     => SigningKey -> (forall a. m a -> IO a) -> Application
@@ -62,7 +59,7 @@ loginHandler :: (UserStore m, Clock m)
 loginHandler key runStore (LoginRequest n p) =
     liftIO (runStore ((,) <$> authenticate n p <*> now)) >>= \case
         (Nothing, _) ->
-            respond (WithStatus @401 NoContent)
+            respond (WithStatus @401 NoBody)
         (Just (User uid _ _ _), issuedAt) ->
             liftIO (issueToken key issuedAt uid) >>= \case
                 Left _      -> throwError err500
@@ -80,13 +77,13 @@ storeServer = userServer :<|> topicServer :<|> noteServer
         meHandler uid =
             loadUser uid >>= \case
                 Just user -> respond (WithStatus @200 (toUserView user))
-                Nothing   -> respond (WithStatus @404 NoContent)
+                Nothing   -> respond (WithStatus @404 NoBody)
 
         createUserHandler :: (UserStore m, Fresh m, Clock m) => ServerT CreateUser m
         createUserHandler (CreateUserRequest n p) =
             register n p >>= \case
                 UserCreated user    -> respond (WithStatus @201 (toUserView user))
-                UsernameTaken       -> respond (WithStatus @409 NoContent)
+                UsernameTaken       -> respond (WithStatus @409 NoBody)
                 UserRefused refusal -> respond (WithStatus @422 refusal)
 
         topicsForUserHandler :: NoteStore m => UserId -> ServerT TopicsForUser m
@@ -103,14 +100,14 @@ storeServer = userServer :<|> topicServer :<|> noteServer
         deleteTopicHandler :: (NoteStore m, Clock m) => TopicId -> ServerT DeleteTopic m
         deleteTopicHandler tid (DeleteTopicRequest uid did vc dest) =
             deleteTopicFor uid did tid vc dest >>= \case
-                TopicDeleted          -> respond (WithStatus @204 NoContent)
+                TopicDeleted          -> respond (WithStatus @204 NoBody)
                 TopicConflicted topic -> respond (WithStatus @409 (toTopicView topic))
                 TopicRefused refusal  -> respond (WithStatus @422 refusal)
 
         storeTopicHandler :: (NoteStore m, Clock m) => TopicId -> ServerT StoreTopic m
         storeTopicHandler tid (StoreTopicRequest uid did mVc n d) =
             storeTopicFor uid did tid mVc n d >>= \case
-                Nothing    -> respond (WithStatus @204 NoContent)
+                Nothing    -> respond (WithStatus @204 NoBody)
                 Just topic -> respond (WithStatus @409 (toTopicView topic))
 
         notesForTopicHandler :: NoteStore m => TopicId -> ServerT NotesForTopic m
@@ -124,18 +121,18 @@ storeServer = userServer :<|> topicServer :<|> noteServer
         loadHandler nid =
             load nid >>= \case
                 Just note -> respond (WithStatus @200 (toView note))
-                Nothing   -> respond (WithStatus @404 NoContent)
+                Nothing   -> respond (WithStatus @404 NoBody)
 
         storeHandler :: (NoteStore m, Clock m) => NoteId -> ServerT StoreNote m
         storeHandler nid (StoreRequest uid did mVc t c ci sf tid) =
             store uid did nid mVc t c ci sf tid >>= \case
-                Nothing   -> respond (WithStatus @204 NoContent)
+                Nothing   -> respond (WithStatus @204 NoBody)
                 Just note -> respond (WithStatus @409 (toView note))
 
         deleteHandler :: NoteStore m => NoteId -> ServerT DeleteNote m
         deleteHandler nid (DeleteRequest vc) =
             delete nid vc >>= \case
-                Nothing   -> respond (WithStatus @204 NoContent)
+                Nothing   -> respond (WithStatus @204 NoBody)
                 Just note -> respond (WithStatus @409 (toView note))
 
 localCors :: CorsResourcePolicy
