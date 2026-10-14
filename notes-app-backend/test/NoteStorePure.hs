@@ -61,6 +61,9 @@ instance UserStore NoteStorePure where
                 modify' $ \s -> s { users = M.insert uid user (users s) }
                 pure (UserCreated ())
 
+    loadUser :: UserId -> NoteStorePure (Maybe User)
+    loadUser uid = NoteStorePure $ gets (M.lookup uid . users)
+
     loadUserByName :: Username -> NoteStorePure (Maybe User)
     loadUserByName username = NoteStorePure $ gets (byName username . users)
 

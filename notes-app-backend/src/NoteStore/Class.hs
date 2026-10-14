@@ -32,6 +32,8 @@ class Monad m => UserStore m where
 
     createUser :: User -> m (UserCreation ())
 
+    loadUser :: UserId -> m (Maybe User)
+
     loadUserByName :: Username -> m (Maybe User)
 
 class Fresh m where

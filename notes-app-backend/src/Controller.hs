@@ -1,48 +1,80 @@
 {-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE RankNTypes            #-}
+{-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeOperators         #-}
 
 module Controller ( CreateUserRequest (..)
                   , DeleteRequest (..)
                   , DeleteTopicRequest (..)
+                  , LoginRequest (..)
                   , NotesAPI
                   , NoteView (..)
                   , StoreRequest (..)
                   , StoreTopicRequest (..)
+                  , TokenView (..)
                   , TopicView (..)
                   , UserView (..)
                   , app
                   , notesOpenApi
                   ) where
 
+import Auth.Token
 import NoteStore.Class
 import NotesApp
 import Types
 
-import           Control.Lens                ((&), (.~), (?~))
-import           Control.Monad.IO.Class      (liftIO)
-import           Data.Aeson                  (FromJSON, ToJSON)
-import           Data.OpenApi                (NamedSchema (..), OpenApi, Tag (..), ToSchema (..), applyTagsFor,
-                                              info, version)
+import           Control.Lens                     ((&), (.~), (<>~), (?~), at)
+import           Control.Monad.IO.Class           (liftIO)
+import           Data.Aeson                       (Encoding, FromJSON, Options (..), ToJSON (..), Value (..),
+                                                   camelTo2, defaultOptions, genericToJSON, pairs)
+import qualified Data.Aeson.Encoding as E
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
+import qualified Data.HashMap.Strict.InsOrd.Compat as InsOrd
+import           Data.OpenApi                     (NamedSchema (..), OAuth2Flow (..),
+                                                   OAuth2Flows (..), OAuth2PasswordFlow (..), OpenApi,
+                                                   Referenced (..), SecurityDefinitions (..),
+                                                   SecurityRequirement (..), SecurityScheme (..),
+                                                   SecuritySchemeType (..), Tag (..), ToSchema (..),
+                                                   allOperations, applyTagsFor, components,
+                                                   fromAesonOptions, genericDeclareNamedSchema, info,
+                                                   responses, security, securitySchemes, version)
 import qualified Data.OpenApi as OpenApi
-import           Data.Time                   (UTCTime)
+import           Data.List                        (elemIndex, sortOn)
+import           Data.Maybe                       (fromMaybe)
+import           Data.Text                        (Text)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import           Data.Time                        (UTCTime, getCurrentTime)
 import qualified Data.Vector as V
-import           GHC.Generics                (Generic)
-import           Network.Wai.Middleware.Cors (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
+import           GHC.Generics                     (Generic)
+import           Network.Wai                      (Request, requestHeaders)
+import           Network.Wai.Middleware.Cors      (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
 import           Servant
-import           Servant.OpenApi             (subOperations, toOpenApi)
-import           Servant.Swagger.UI          (SwaggerSchemaUI, swaggerSchemaUIServer)
+import           Servant.OpenApi                  (HasOpenApi (..), subOperations)
+import           Servant.Server.Experimental.Auth (AuthHandler, AuthServerData, mkAuthHandler)
+import           Servant.Swagger.UI               (SwaggerSchemaUI', swaggerSchemaUIServer')
+import           Web.FormUrlEncoded               (FromForm)
 
-type NotesAPI =
-         UserAPI
+type NotesAPI
+    =    AuthAPI
+    :<|> StoreAPI
+
+type StoreAPI
+    =    UserAPI
     :<|> TopicAPI
     :<|> NoteAPI
 
+type AuthAPI =
+    "login" :> Login
+
 type UserAPI =
          "user" :> CreateUser
+    :<|> "me" :> AuthProtect "jwt" :> Me
     :<|> "user" :> Capture "userId" UserId :> "topics" :> TopicsForUser
     :<|> "user" :> Capture "userId" UserId :> "topics" :> Capture "topicId" TopicId :> AddTopic
 
@@ -59,6 +91,17 @@ type CreateUser =
                                 , WithStatus 409 NoContent
                                 , WithStatus 422 UserRefusal
                                 ]
+
+type Login =
+    ReqBody '[JSON, FormUrlEncoded] LoginRequest
+        :> UVerb 'POST '[JSON] '[ WithStatus 200 TokenView
+                                , WithStatus 401 NoContent
+                                ]
+
+type Me =
+    UVerb 'GET '[JSON] '[ WithStatus 200 UserView
+                        , WithStatus 404 NoContent
+                        ]
 
 type LoadNote =
     UVerb 'GET '[JSON] '[ WithStatus 200 NoteView
@@ -100,7 +143,7 @@ type AddTopic =
     PutNoContent
 
 type API =
-         SwaggerSchemaUI "swagger-ui" "openapi.json"
+         SwaggerSchemaUI' "swagger-ui" ("openapi.json" :> Get '[JSON] OrderedSpec)
     :<|> NotesAPI
 
 data NoteView =
@@ -191,6 +234,46 @@ instance ToJSON   UserView
 instance FromJSON UserView
 instance ToSchema UserView
 
+data LoginRequest =
+    LoginRequest { username :: !Username
+                 , password :: !Password
+                 } deriving (Show, Generic)
+
+instance FromJSON LoginRequest
+instance FromForm LoginRequest
+instance ToSchema LoginRequest
+
+data TokenView =
+    TokenView { accessToken :: !Text
+              , tokenType   :: !Text
+              , expiresIn   :: !Int
+              } deriving (Eq, Show, Generic)
+
+snakeCase :: Options
+snakeCase = defaultOptions { fieldLabelModifier = camelTo2 '_' }
+
+instance ToJSON TokenView where
+    toJSON = genericToJSON snakeCase
+
+instance ToSchema TokenView where
+    declareNamedSchema = genericDeclareNamedSchema (fromAesonOptions snakeCase)
+
+type instance AuthServerData (AuthProtect "jwt") = UserId
+
+-- TO fix - orphan instance
+instance HasOpenApi api => HasOpenApi (AuthProtect "jwt" :> api) where
+    toOpenApi _ =
+        toOpenApi (Proxy @api)
+            & components . securitySchemes <>~ SecurityDefinitions (InsOrd.singleton "login" loginScheme)
+            & allOperations . security .~ [SecurityRequirement (InsOrd.singleton "login" [])]
+            & allOperations . responses . at 401 ?~ Inline (mempty & OpenApi.description .~ "Missing, invalid or expired token")
+
+loginScheme :: SecurityScheme
+loginScheme =
+    SecurityScheme
+        (SecuritySchemeOAuth2 (mempty { _oAuth2FlowsPassword = Just (OAuth2Flow (OAuth2PasswordFlow "/login") Nothing mempty) }))
+        (Just "Log in with a username and password, sending the token as a Bearer header")
+
 -- TO fix - orphan instance
 instance ToSchema NoContent where
     declareNamedSchema _ = pure (NamedSchema Nothing mempty)
@@ -204,19 +287,46 @@ toTopicView (Topic tid vc n d ua) = TopicView tid vc n d ua
 toUserView :: User -> UserView
 toUserView (User uid n _ ca) = UserView uid n ca
 
--- | The whole application, run against any 'NoteStore' that can be run in 'IO'.
-app :: (NoteStore m, UserStore m, Fresh m, Log m, Clock m) => (forall a. m a -> IO a) -> Application
-app runStore =
+app :: (NoteStore m, UserStore m, Fresh m, Log m, Clock m)
+    => SigningKey -> (forall a. m a -> IO a) -> Application
+app key runStore =
     cors (const (Just localCors)) $
-        serve (Proxy @API) $
-                 swaggerSchemaUIServer notesOpenApi
-            :<|> hoistServer (Proxy @NotesAPI) (liftIO . runStore) notesServer
+        serveWithContext (Proxy @API) (authHandler key :. EmptyContext) $
+                 swaggerSchemaUIServer' (pure (OrderedSpec (toJSON notesOpenApi)))
+            :<|> loginHandler key runStore
+            :<|> hoistServerWithContext (Proxy @StoreAPI) (Proxy @'[AuthHandler Request UserId])
+                                        (liftIO . runStore) storeServer
 
-notesServer :: (NoteStore m, UserStore m, Fresh m, Log m, Clock m) => ServerT NotesAPI m
-notesServer = userServer :<|> topicServer :<|> noteServer
+authHandler :: SigningKey -> AuthHandler Request UserId
+authHandler key = mkAuthHandler $ \req ->
+    case bearerToken =<< lookup "Authorization" (requestHeaders req) of
+        Nothing    -> throwError unauthorized
+        Just token -> do
+            t <- liftIO getCurrentTime
+            either (const (throwError unauthorized)) pure (verifyToken key t token)
+    where
+    bearerToken header = do
+        (scheme, token) <- T.breakOn " " <$> either (const Nothing) Just (TE.decodeUtf8' header)
+        if T.toLower scheme == "bearer" then Just (T.strip token) else Nothing
+
+    unauthorized = err401 { errHeaders = [("WWW-Authenticate", "Bearer")] }
+
+loginHandler :: (UserStore m, Clock m)
+             => SigningKey -> (forall a. m a -> IO a) -> ServerT Login Handler
+loginHandler key runStore (LoginRequest n p) =
+    liftIO (runStore ((,) <$> authenticate n p <*> now)) >>= \case
+        (Nothing, _) ->
+            respond (WithStatus @401 NoContent)
+        (Just (User uid _ _ _), issuedAt) ->
+            liftIO (issueToken key issuedAt uid) >>= \case
+                Left _      -> throwError err500
+                Right token -> respond (WithStatus @200 (TokenView token "Bearer" (round tokenLifetime)))
+
+storeServer :: (NoteStore m, UserStore m, Fresh m, Log m, Clock m) => ServerT StoreAPI m
+storeServer = userServer :<|> topicServer :<|> noteServer
 
 userServer :: (NoteStore m, UserStore m, Fresh m, Clock m) => ServerT UserAPI m
-userServer = createUserHandler :<|> topicsForUserHandler :<|> addTopicHandler
+userServer = createUserHandler :<|> meHandler :<|> topicsForUserHandler :<|> addTopicHandler
 
 topicServer :: (NoteStore m, Clock m) => ServerT TopicAPI m
 topicServer = (\tid -> storeTopicHandler tid :<|> deleteTopicHandler tid)
@@ -231,6 +341,12 @@ createUserHandler (CreateUserRequest n p) =
         UserCreated user    -> respond (WithStatus @201 (toUserView user))
         UsernameTaken       -> respond (WithStatus @409 NoContent)
         UserRefused refusal -> respond (WithStatus @422 refusal)
+
+meHandler :: UserStore m => UserId -> ServerT Me m
+meHandler uid =
+    loadUser uid >>= \case
+        Just user -> respond (WithStatus @200 (toUserView user))
+        Nothing   -> respond (WithStatus @404 NoContent)
 
 loadHandler :: NoteStore m => NoteId -> ServerT LoadNote m
 loadHandler nid =
@@ -275,6 +391,8 @@ addTopicHandler uid tid = NoContent <$ addTopic uid tid
 notesOpenApi :: OpenApi
 notesOpenApi =
     toOpenApi (Proxy @NotesAPI)
+        & applyTagsFor (subOperations (Proxy @AuthAPI)  (Proxy @NotesAPI))
+                       [Tag "auth"  (Just "Logging in") Nothing]
         & applyTagsFor (subOperations (Proxy @UserAPI)  (Proxy @NotesAPI))
                        [Tag "user"  (Just "Users, and the topics each has") Nothing]
         & applyTagsFor (subOperations (Proxy @TopicAPI) (Proxy @NotesAPI))
@@ -291,7 +409,31 @@ notesOpenApi =
                                 \NoSuchDestination if that topic doesn't exist or is the one being deleted, \
                                 \or SharedWithNotes if the topic still has notes and more than one user. \
                                 \POST /user creates a user, returning 201 with the new user, 409 if the \
-                                \username is taken, or 422 with BlankUsername or EmptyPassword."
+                                \username is taken, or 422 with BlankUsername or EmptyPassword. \
+                                \POST /login returns a bearer token, or 401 for a wrong username or password; \
+                                \use Authorize to log in here. GET /me needs that token."
+
+newtype OrderedSpec = OrderedSpec Value
+
+instance ToJSON OrderedSpec where
+    toJSON (OrderedSpec v) = v
+    toEncoding (OrderedSpec v) = ordered v
+
+ordered :: Value -> Encoding
+ordered (Array a)  = E.list ordered (V.toList a)
+ordered (Object o) = pairs (foldMap field (KeyMap.toList o))
+    where
+    field ("properties", Object props) =
+        E.pair "properties" (pairs (foldMap (\(k, v) -> E.pair k (ordered v)) (byRequired props)))
+    field (k, v) =
+        E.pair k (ordered v)
+
+    byRequired = sortOn (rank . fst) . KeyMap.toList
+    rank k     = fromMaybe maxBound (elemIndex (String (Key.toText k)) required)
+    required   = case KeyMap.lookup "required" o of
+                     Just (Array r) -> V.toList r
+                     _              -> []
+ordered v = toEncoding v
 
 localCors :: CorsResourcePolicy
 localCors =

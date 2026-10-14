@@ -140,6 +140,20 @@ instance UserStore NoteStoreSQLite where
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT (username) DO NOTHING; |]
 
+    loadUser :: UserId -> NoteStoreSQLite (Maybe User)
+    loadUser uid = NoteStoreSQLite $ do
+        conn <- ask
+        liftIO $
+            listToMaybe . map toUser
+                <$> query conn sqlLoadUser (Only (SQLUserId uid))
+
+        where
+        sqlLoadUser :: Query
+        sqlLoadUser = [iii|
+            SELECT id, username, password_salt, password_hash, created_at
+            FROM User
+            WHERE id = ?; |]
+
     loadUserByName :: Username -> NoteStoreSQLite (Maybe User)
     loadUserByName (Username username) = NoteStoreSQLite $ do
         conn <- ask

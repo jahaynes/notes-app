@@ -1,4 +1,5 @@
 module NotesApp ( addTopic
+                , authenticate
                 , delete
                 , deleteTopicFor
                 , load
@@ -9,7 +10,7 @@ module NotesApp ( addTopic
                 , topicsFor
                 ) where
 
-import Auth.Password (hashPassword)
+import Auth.Password (hashPassword, verifyPassword)
 import Types
 
 import           Data.Maybe           (fromMaybe)
@@ -126,3 +127,23 @@ register (Username name) password@(Password plain)
 
     where
     trimmed = T.strip name
+
+authenticate :: UserStore m
+             => Username -> Password
+             -> m (Maybe User)
+authenticate username password =
+
+    loadUserByName username >>= \case
+
+        Just user@(User _ _ hash _)
+            | verifyPassword password hash ->
+                pure (Just user)
+
+        Just _ ->
+            pure Nothing
+
+        Nothing ->
+            hashPassword unknownUserSalt password `seq` pure Nothing
+
+    where
+    unknownUserSalt = Salt "no-such-user-salt"

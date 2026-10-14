@@ -170,11 +170,11 @@ instance ToSchema TopicRefusal
 
 newtype Username
     = Username Text
-        deriving (Eq, Ord, Show, ToJSON, FromJSON, ToSchema)
+        deriving (Eq, Ord, Show, ToJSON, FromJSON, ToSchema, FromHttpApiData)
 
 newtype Password
     = Password Text
-        deriving (FromJSON, ToSchema)
+        deriving (FromJSON, ToSchema, FromHttpApiData)
 
 instance Show Password where
     show _ = "Password <hidden>"

@@ -4,13 +4,16 @@ module Main ( main ) where
 
 import qualified Data.Map.Strict as M
 import           Data.Text       (Text)
-import           Data.Time       (UTCTime (..), fromGregorian)
+import qualified Data.Text       as T
+import           Data.Either     (isLeft)
+import           Data.Time       (UTCTime (..), addUTCTime, fromGregorian)
 import qualified Data.UUID       as UUID
 import qualified Data.Vector     as V
 import           Data.Word       (Word32)
 import           Test.Hspec
 
 import Auth.Password
+import Auth.Token
 import NoteStore.Class
 import NoteStore.SQLite.NoteStoreSQLite
 import NoteStorePure
@@ -23,6 +26,43 @@ main = hspec $ do
     noteStoreSpec "NoteStoreSQLite" (runNoteStoreSQLite ":memory:")
     notesAppSpec
     passwordSpec
+    tokenSpec
+
+tokenSpec :: Spec
+tokenSpec = describe "Auth.Token" $ do
+
+    let key   = signingKey "a-signing-secret-of-32-bytes-ok!"
+        other = signingKey "another-secret-that-is-32-bytes!"
+        issue = issueToken key pureNow aliceU >>= either (fail . show) pure
+
+    it "verifies a token it issued, giving back the user" $ do
+        token <- issue
+        verifyToken key pureNow token `shouldBe` Right aliceU
+
+    it "accepts a token until it expires, then rejects it" $ do
+        token <- issue
+        verifyToken key (addUTCTime (tokenLifetime - 1) pureNow) token `shouldBe` Right aliceU
+        verifyToken key (addUTCTime (tokenLifetime + 1) pureNow) token `shouldSatisfy` isLeft
+
+    it "rejects a token signed with another key" $ do
+        token <- issue
+        verifyToken other pureNow token `shouldSatisfy` isLeft
+
+    it "rejects a token whose claims have been changed" $ do
+        token <- issue
+        forged <- issueToken other pureNow bobU >>= either (fail . show) pure
+        let (header, _, signature) = jwtParts token
+            (_, bobClaims, _)      = jwtParts forged
+        verifyToken key pureNow (T.intercalate "." [header, bobClaims, signature]) `shouldSatisfy` isLeft
+
+    it "rejects an unsigned token" $ do
+        token <- issue
+        let (_, claims, _) = jwtParts token
+            none           = "eyJhbGciOiJub25lIn0"  -- {"alg":"none"}
+        verifyToken key pureNow (T.intercalate "." [none, claims, ""]) `shouldSatisfy` isLeft
+
+    it "rejects garbage" $
+        verifyToken key pureNow "not a token" `shouldSatisfy` isLeft
 
 passwordSpec :: Spec
 passwordSpec = describe "Auth.Password" $ do
@@ -242,6 +282,20 @@ notesAppSpec = describe "NotesApp" $ do
     it "accepts a one character password" $
         run ((() <$) <$> register (Username "alice") (Password "x"))
             `shouldBe` UserCreated ()
+
+    it "authenticates a user with their password" $
+        run (do _ <- register (Username "alice") (Password "hunter22")
+                fmap (\(User _ n _ _) -> n) <$> authenticate (Username "alice") (Password "hunter22"))
+            `shouldBe` Just (Username "alice")
+
+    it "doesn't authenticate a wrong password" $
+        run (do _ <- register (Username "alice") (Password "hunter22")
+                fmap userIdOf <$> authenticate (Username "alice") (Password "hunter23"))
+            `shouldBe` Nothing
+
+    it "doesn't authenticate an unknown user" $
+        run (fmap userIdOf <$> authenticate (Username "alice") (Password "hunter22"))
+            `shouldBe` Nothing
 
 -- | Runs the same spec against each 'NoteStore' implementation, so the SQL
 -- conflict check is held to the same semantics as 'isNewerThan'.
@@ -519,6 +573,12 @@ noteStoreSpec name run' = describe name $ do
                  (,) c <$> loadUserByName (Username "alice"))
             `shouldReturn` (UsernameTaken, Just (user aliceU "alice"))
 
+    it "loads a user back by id" $
+        run' (do _ <- createUser (user aliceU "alice")
+                 _ <- createUser (user bobU "bob")
+                 (,) <$> loadUser bobU <*> loadUser (UserId (uuid 99)))
+            `shouldReturn` (Just (user bobU "bob"), Nothing)
+
     it "matches usernames exactly" $
         run' (do _ <- createUser (user aliceU "alice")
                  c <- createUser (user bobU "Alice")
@@ -559,6 +619,11 @@ user uid name =
 
 userIdOf :: User -> UserId
 userIdOf (User uid _ _ _) = uid
+
+jwtParts :: Text -> (Text, Text, Text)
+jwtParts token = case T.splitOn "." token of
+    [header, claims, signature] -> (header, claims, signature)
+    _                           -> error ("not a JWT: " <> T.unpack token)
 
 later :: UTCTime
 later = UTCTime (fromGregorian 2026 1 2) 0
