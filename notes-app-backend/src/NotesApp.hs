@@ -3,14 +3,17 @@ module NotesApp ( addTopic
                 , deleteTopicFor
                 , load
                 , notesFor
+                , register
                 , store
                 , storeTopicFor
                 , topicsFor
                 ) where
 
+import Auth.Password (hashPassword)
 import Types
 
 import           Data.Maybe           (fromMaybe)
+import qualified Data.Text       as T
 import           NoteStore.Class
 import qualified Data.Map.Strict as M
 import           Data.Vector          (Vector)
@@ -99,3 +102,27 @@ deleteTopicFor userId deviceId topicId vectorClock destination = do
 
         TopicRefused refusal ->
             pure (TopicRefused refusal)
+
+register :: (UserStore m, Fresh m, Clock m)
+         => Username -> Password
+         -> m (UserCreation User)
+register (Username name) password@(Password plain)
+
+    | T.null trimmed =
+        pure (UserRefused BlankUsername)
+
+    | T.null plain =
+        pure (UserRefused EmptyPassword)
+
+    | otherwise = do
+
+        userId    <- freshUserId
+        salt      <- freshSalt
+        createdAt <- now
+
+        let user = User userId (Username trimmed) (hashPassword salt password) createdAt
+
+        (user <$) <$> createUser user
+
+    where
+    trimmed = T.strip name

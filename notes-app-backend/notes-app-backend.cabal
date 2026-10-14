@@ -22,9 +22,11 @@ common common
         base,
         bytestring,
         containers,
+        crypton,
         http-api-data,
         lens,
         openapi3,
+        ram,
         safe-exceptions,
         servant,
         servant-openapi3,
@@ -43,7 +45,8 @@ common common
 
 library
     import:           common
-    exposed-modules:  Controller
+    exposed-modules:  Auth.Password
+                      Controller
                       NotesApp
                       NoteStore.Class
                       NoteStore.SQLite.NoteStoreSQLite

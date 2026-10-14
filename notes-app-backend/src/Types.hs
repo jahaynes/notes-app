@@ -6,6 +6,9 @@ module Types ( ColorIndex (..)
              , Newer (..)
              , Note (..)
              , NoteId (..)
+             , Password (..)
+             , PasswordHash (..)
+             , Salt (..)
              , Title (..)
              , Topic (..)
              , TopicDeletion (..)
@@ -13,8 +16,12 @@ module Types ( ColorIndex (..)
              , TopicRefusal (..)
              , TopicId (..)
              , TopicName (..)
+             , User (..)
+             , UserCreation (..)
              , UserDevice (..)
              , UserId (..)
+             , UserRefusal (..)
+             , Username (..)
              , VectorClock (..)
              , Written (..)
              , tick
@@ -24,6 +31,7 @@ import           Control.Lens         ((&), (?~))
 import           Data.Aeson           (FromJSON (..), FromJSONKey (..), FromJSONKeyFunction (..),
                                        ToJSON (..), ToJSONKey (..), Value (String), withText)
 import           Data.Aeson.Types     (Parser, toJSONKeyText)
+import           Data.ByteString      (ByteString)
 import           Data.Map.Strict      (Map)
 import qualified Data.Map.Strict as M
 import           Data.OpenApi         (NamedSchema (..), OpenApiType (OpenApiString),
@@ -159,3 +167,41 @@ data TopicRefusal
 instance ToJSON   TopicRefusal
 instance FromJSON TopicRefusal
 instance ToSchema TopicRefusal
+
+newtype Username
+    = Username Text
+        deriving (Eq, Ord, Show, ToJSON, FromJSON, ToSchema)
+
+newtype Password
+    = Password Text
+        deriving (FromJSON, ToSchema)
+
+instance Show Password where
+    show _ = "Password <hidden>"
+
+newtype Salt
+    = Salt ByteString
+        deriving (Eq, Show)
+
+data PasswordHash
+    = PasswordHash !Salt !ByteString
+        deriving (Eq, Show)
+
+data User
+    = User !UserId !Username !PasswordHash !UTCTime
+        deriving (Eq, Show)
+
+data UserCreation a
+    = UserCreated !a
+    | UsernameTaken
+    | UserRefused !UserRefusal
+        deriving (Eq, Show, Functor)
+
+data UserRefusal
+    = BlankUsername
+    | EmptyPassword
+        deriving (Eq, Show, Generic)
+
+instance ToJSON   UserRefusal
+instance FromJSON UserRefusal
+instance ToSchema UserRefusal

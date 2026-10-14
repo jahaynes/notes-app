@@ -33,6 +33,12 @@ newtype SQLUserId
 instance ToField SQLUserId where
     toField (SQLUserId (UserId u)) = toField (UUID.toText u)
 
+instance FromField SQLUserId where
+    fromField f = fromField f >>= \(t :: Text) ->
+        case UUID.fromText t of
+            Just u  -> Ok (SQLUserId (UserId u))
+            Nothing -> returnError ConversionFailed f "invalid UUID"
+
 newtype SQLClock
     = SQLClock VectorClock
 

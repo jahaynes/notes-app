@@ -5,13 +5,15 @@
 {-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeOperators         #-}
 
-module Controller ( DeleteRequest (..)
+module Controller ( CreateUserRequest (..)
+                  , DeleteRequest (..)
                   , DeleteTopicRequest (..)
                   , NotesAPI
                   , NoteView (..)
                   , StoreRequest (..)
                   , StoreTopicRequest (..)
                   , TopicView (..)
+                  , UserView (..)
                   , app
                   , notesOpenApi
                   ) where
@@ -40,7 +42,8 @@ type NotesAPI =
     :<|> NoteAPI
 
 type UserAPI =
-         "user" :> Capture "userId" UserId :> "topics" :> TopicsForUser
+         "user" :> CreateUser
+    :<|> "user" :> Capture "userId" UserId :> "topics" :> TopicsForUser
     :<|> "user" :> Capture "userId" UserId :> "topics" :> Capture "topicId" TopicId :> AddTopic
 
 type TopicAPI =
@@ -49,6 +52,13 @@ type TopicAPI =
 
 type NoteAPI =
     "note" :> Capture "noteId" NoteId :> (LoadNote :<|> StoreNote :<|> DeleteNote)
+
+type CreateUser =
+    ReqBody '[JSON] CreateUserRequest
+        :> UVerb 'POST '[JSON] '[ WithStatus 201 UserView
+                                , WithStatus 409 NoContent
+                                , WithStatus 422 UserRefusal
+                                ]
 
 type LoadNote =
     UVerb 'GET '[JSON] '[ WithStatus 200 NoteView
@@ -127,7 +137,6 @@ newtype DeleteRequest =
     DeleteRequest { clock :: VectorClock
                   } deriving (Eq, Show, Generic)
 
-instance ToJSON   DeleteRequest
 instance FromJSON DeleteRequest
 instance ToSchema DeleteRequest
 
@@ -151,7 +160,6 @@ data StoreTopicRequest =
                       , description :: !(Maybe TopicDescription)
                       } deriving (Eq, Show, Generic)
 
-instance ToJSON   StoreTopicRequest
 instance FromJSON StoreTopicRequest
 instance ToSchema StoreTopicRequest
 
@@ -162,9 +170,26 @@ data DeleteTopicRequest =
                        , moveNotesTo :: !TopicId
                        } deriving (Eq, Show, Generic)
 
-instance ToJSON   DeleteTopicRequest
 instance FromJSON DeleteTopicRequest
 instance ToSchema DeleteTopicRequest
+
+data CreateUserRequest =
+    CreateUserRequest { username :: !Username
+                      , password :: !Password
+                      } deriving (Show, Generic)
+
+instance FromJSON CreateUserRequest
+instance ToSchema CreateUserRequest
+
+data UserView =
+    UserView { userId    :: !UserId
+             , username  :: !Username
+             , createdAt :: !UTCTime
+             } deriving (Eq, Show, Generic)
+
+instance ToJSON   UserView
+instance FromJSON UserView
+instance ToSchema UserView
 
 -- TO fix - orphan instance
 instance ToSchema NoContent where
@@ -176,19 +201,22 @@ toView (Note nid vc t c ci sf tid ua) = NoteView nid vc t c ci sf tid ua
 toTopicView :: Topic -> TopicView
 toTopicView (Topic tid vc n d ua) = TopicView tid vc n d ua
 
+toUserView :: User -> UserView
+toUserView (User uid n _ ca) = UserView uid n ca
+
 -- | The whole application, run against any 'NoteStore' that can be run in 'IO'.
-app :: (NoteStore m, Log m, Clock m) => (forall a. m a -> IO a) -> Application
+app :: (NoteStore m, UserStore m, Fresh m, Log m, Clock m) => (forall a. m a -> IO a) -> Application
 app runStore =
     cors (const (Just localCors)) $
         serve (Proxy @API) $
                  swaggerSchemaUIServer notesOpenApi
             :<|> hoistServer (Proxy @NotesAPI) (liftIO . runStore) notesServer
 
-notesServer :: (NoteStore m, Log m, Clock m) => ServerT NotesAPI m
+notesServer :: (NoteStore m, UserStore m, Fresh m, Log m, Clock m) => ServerT NotesAPI m
 notesServer = userServer :<|> topicServer :<|> noteServer
 
-userServer :: NoteStore m => ServerT UserAPI m
-userServer = topicsForUserHandler :<|> addTopicHandler
+userServer :: (NoteStore m, UserStore m, Fresh m, Clock m) => ServerT UserAPI m
+userServer = createUserHandler :<|> topicsForUserHandler :<|> addTopicHandler
 
 topicServer :: (NoteStore m, Clock m) => ServerT TopicAPI m
 topicServer = (\tid -> storeTopicHandler tid :<|> deleteTopicHandler tid)
@@ -196,6 +224,13 @@ topicServer = (\tid -> storeTopicHandler tid :<|> deleteTopicHandler tid)
 
 noteServer :: (NoteStore m, Clock m) => ServerT NoteAPI m
 noteServer = \nid -> loadHandler nid :<|> storeHandler nid :<|> deleteHandler nid
+
+createUserHandler :: (UserStore m, Fresh m, Clock m) => ServerT CreateUser m
+createUserHandler (CreateUserRequest n p) =
+    register n p >>= \case
+        UserCreated user    -> respond (WithStatus @201 (toUserView user))
+        UsernameTaken       -> respond (WithStatus @409 NoContent)
+        UserRefused refusal -> respond (WithStatus @422 refusal)
 
 loadHandler :: NoteStore m => NoteId -> ServerT LoadNote m
 loadHandler nid =
@@ -241,7 +276,7 @@ notesOpenApi :: OpenApi
 notesOpenApi =
     toOpenApi (Proxy @NotesAPI)
         & applyTagsFor (subOperations (Proxy @UserAPI)  (Proxy @NotesAPI))
-                       [Tag "user"  (Just "The topics each user has") Nothing]
+                       [Tag "user"  (Just "Users, and the topics each has") Nothing]
         & applyTagsFor (subOperations (Proxy @TopicAPI) (Proxy @NotesAPI))
                        [Tag "topic" (Just "Topics, and the notes in them") Nothing]
         & applyTagsFor (subOperations (Proxy @NoteAPI)  (Proxy @NotesAPI))
@@ -254,12 +289,16 @@ notesOpenApi =
                                 \(including if it never existed), or 409 with the stored note. \
                                 \Deleting a topic moves its notes to moveNotesTo, or returns 422 with \
                                 \NoSuchDestination if that topic doesn't exist or is the one being deleted, \
-                                \or SharedWithNotes if the topic still has notes and more than one user."
+                                \or SharedWithNotes if the topic still has notes and more than one user. \
+                                \POST /user creates a user, returning 201 with the new user, 409 if the \
+                                \username is taken, or 422 with BlankUsername or EmptyPassword."
 
 localCors :: CorsResourcePolicy
 localCors =
     simpleCorsResourcePolicy
-        { corsOrigins        = Just (["http://127.0.0.1:3000"], False)
+        { corsOrigins        = Just ([ "http://127.0.0.1:3000"
+                                     , "http://127.0.0.1:8081"
+                                     ], False)
         , corsMethods        = ["GET", "PUT", "POST", "DELETE", "OPTIONS"]
         , corsRequestHeaders = ["Content-Type", "Authorization", "Accept"]
         }

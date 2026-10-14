@@ -28,6 +28,18 @@ class Monad m => NoteStore m where
 
     deleteNote :: NoteId -> VectorClock -> m Written
 
+class Monad m => UserStore m where
+
+    createUser :: User -> m (UserCreation ())
+
+    loadUserByName :: Username -> m (Maybe User)
+
+class Fresh m where
+
+    freshUserId :: m UserId
+
+    freshSalt :: m Salt
+
 class Log m where
 
     lPutStr :: Text -> m ()

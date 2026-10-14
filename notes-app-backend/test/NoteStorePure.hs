@@ -1,12 +1,14 @@
-module NoteStorePure (NoteStorePure, Store, emptyStore, pureNow, runNoteStorePure) where
+module NoteStorePure (NoteStorePure, Store, emptyStore, pureNow, pureSalt, runNoteStorePure) where
 
 import           Control.Monad.Trans.State.Strict (State, evalState, get, gets, modify', put)
 import           Data.Map.Strict                  (Map)
+import           Data.List                        (find)
 import           Data.Maybe                       (mapMaybe)
 import qualified Data.Map.Strict as M
 import           Data.Set                         (Set)
 import qualified Data.Set        as S
 import           Data.Time                        (UTCTime (..), fromGregorian)
+import qualified Data.UUID       as UUID
 import           Data.Vector (Vector)
 import qualified Data.Vector     as V
 
@@ -17,10 +19,11 @@ data Store =
     Store { notes      :: !(Map NoteId Note)
           , topics     :: !(Map TopicId Topic)
           , userTopics :: !(Map UserId (Set TopicId))
+          , users      :: !(Map UserId User)
           }
 
 emptyStore :: Store
-emptyStore = Store M.empty M.empty M.empty
+emptyStore = Store M.empty M.empty M.empty M.empty
 
 newtype NoteStorePure a =
     NoteStorePure (State Store a)
@@ -35,6 +38,34 @@ instance Clock NoteStorePure where
 
 pureNow :: UTCTime
 pureNow = UTCTime (fromGregorian 2026 1 1) 0
+
+-- | Ids count up from the number of users so far; every salt is the same.
+instance Fresh NoteStorePure where
+    freshUserId = NoteStorePure $
+        gets (UserId . UUID.fromWords 0 0 1 . fromIntegral . M.size . users)
+    freshSalt = pure pureSalt
+
+pureSalt :: Salt
+pureSalt = Salt "pure-salt-16byte"
+
+instance UserStore NoteStorePure where
+
+    createUser :: User -> NoteStorePure (UserCreation ())
+    createUser user@(User uid username _ _) = NoteStorePure $
+
+        gets (byName username . users) >>= \case
+
+            Just _ -> pure UsernameTaken
+
+            Nothing -> do
+                modify' $ \s -> s { users = M.insert uid user (users s) }
+                pure (UserCreated ())
+
+    loadUserByName :: Username -> NoteStorePure (Maybe User)
+    loadUserByName username = NoteStorePure $ gets (byName username . users)
+
+byName :: Username -> Map UserId User -> Maybe User
+byName username = find (\(User _ n _ _) -> n == username) . M.elems
 
 -- | Logs are discarded.
 instance Log NoteStorePure where
@@ -56,7 +87,7 @@ instance NoteStore NoteStorePure where
 
     addTopicForUser :: UserId -> TopicId -> NoteStorePure ()
     addTopicForUser uid tid = NoteStorePure $
-        modify' $ \(Store ns ts uts) -> Store ns ts (grant uid tid uts)
+        modify' $ \(Store ns ts uts us) -> Store ns ts (grant uid tid uts) us
 
     loadTopic :: TopicId -> NoteStorePure (Maybe Topic)
     loadTopic tid = NoteStorePure $ gets (M.lookup tid . topics)
@@ -70,24 +101,24 @@ instance NoteStore NoteStorePure where
                 | not (topic `isNewerThan` storedTopic) -> pure Conflicted
 
             _ -> do
-                modify' $ \(Store ns ts uts) ->
-                    Store ns (M.insert tid topic ts) (grant uid tid uts)
+                modify' $ \(Store ns ts uts us) ->
+                    Store ns (M.insert tid topic ts) (grant uid tid uts) us
                 pure Clean
 
     deleteTopic :: UserDevice -> UTCTime -> TopicId -> VectorClock -> TopicId
                 -> NoteStorePure (TopicDeletion ())
     deleteTopic ud@(UserDevice uid _) updatedAt tid incoming dest = NoteStorePure $ do
 
-        Store ns ts uts <- get
+        Store ns ts uts us <- get
 
-        let hasNotes = any (\(Note _ _ _ _ _ _ ntid _) -> ntid == tid) ns
-            users    = M.size (M.filter (S.member tid) uts)
+        let hasNotes  = any (\(Note _ _ _ _ _ _ ntid _) -> ntid == tid) ns
+            userCount = M.size (M.filter (S.member tid) uts)
 
         case M.lookup tid ts of
 
             _ | dest == tid || M.notMember dest ts -> pure (TopicRefused NoSuchDestination)
 
-            _ | hasNotes && users > 1 -> pure (TopicRefused SharedWithNotes)
+            _ | hasNotes && userCount > 1 -> pure (TopicRefused SharedWithNotes)
 
             Just (Topic _ stored _ _ _)
                 | not (incoming `isNewerThan` stored) -> pure (TopicConflicted ())
@@ -96,6 +127,7 @@ instance NoteStore NoteStorePure where
                 put $ Store (M.map move ns)
                             (M.delete tid ts)
                             (grant uid dest (M.map (S.delete tid) uts))
+                            us
                 pure TopicDeleted
 
         where
@@ -120,8 +152,8 @@ instance NoteStore NoteStorePure where
                 | not (note `isNewerThan` storedNote) -> pure Conflicted
 
             _ -> do
-                modify' $ \(Store ns ts uts) ->
-                    Store (M.insert nid note ns) ts (grant uid tid uts)
+                modify' $ \(Store ns ts uts us) ->
+                    Store (M.insert nid note ns) ts (grant uid tid uts) us
                 pure Clean
 
     deleteNote :: NoteId -> VectorClock -> NoteStorePure Written
@@ -133,7 +165,7 @@ instance NoteStore NoteStorePure where
                 | not (incoming `isNewerThan` stored) -> pure Conflicted
 
             _ -> do
-                modify' $ \(Store ns ts uts) -> Store (M.delete nid ns) ts uts
+                modify' $ \(Store ns ts uts us) -> Store (M.delete nid ns) ts uts us
                 pure Clean
 
 grant :: UserId -> TopicId -> Map UserId (Set TopicId) -> Map UserId (Set TopicId)

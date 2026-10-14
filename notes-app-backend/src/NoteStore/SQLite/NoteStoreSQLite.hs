@@ -5,18 +5,23 @@ module NoteStore.SQLite.NoteStoreSQLite
     , runNoteStoreSQLite
     ) where
 
+import Auth.Password                (saltLength)
 import NoteStore.Class
 import NoteStore.SQLite.SQLiteTypes
 import Types
 
 import           Control.Exception.Safe     (bracket)
+import           Crypto.Random              (getRandomBytes)
 import           Control.Monad.IO.Class     (MonadIO (liftIO))
 import           Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
+import           Data.ByteString            (ByteString)
+import           Data.Functor               ((<&>))
 import           Data.Maybe                 (listToMaybe)
 import           Data.String.Interpolate    (iii)
 import           Data.Text                  (Text)
 import qualified Data.Text.IO as T
 import           Data.Time                  (UTCTime, getCurrentTime)
+import           Data.UUID.V4               (nextRandom)
 import           Data.Vector                (Vector)
 import qualified Data.Vector as V
 import           Database.SQLite.Simple
@@ -34,7 +39,7 @@ runNoteStoreSQLite path (NoteStoreSQLite m) =
 
 create :: Connection -> IO ()
 create conn = withTransaction conn $
-    mapM_ (execute_ conn) [createNote, createNoteTopicIndex, createTopic, createUserTopic]
+    mapM_ (execute_ conn) [createNote, createNoteTopicIndex, createTopic, createUserTopic, createUser']
     where
     createNote = [iii|
         CREATE TABLE IF NOT EXISTS Note (
@@ -67,6 +72,14 @@ create conn = withTransaction conn $
             topic_id TEXT NOT NULL,
             PRIMARY KEY (user_id, topic_id)) WITHOUT ROWID; |]
 
+    createUser' = [iii|
+        CREATE TABLE IF NOT EXISTS User (
+            id            TEXT PRIMARY KEY,
+            username      TEXT NOT NULL UNIQUE,
+            password_salt BLOB NOT NULL,
+            password_hash BLOB NOT NULL,
+            created_at    TEXT NOT NULL); |]
+
 sqlAddUserTopic :: Query
 sqlAddUserTopic = [iii|
     INSERT OR IGNORE INTO UserTopic (user_id, topic_id)
@@ -80,6 +93,10 @@ toNote (SQLNoteId nid, value, SQLClock clock, title, colorIndex, showFull, topic
 toTopic :: (Text, SQLClock, Text, Maybe Text, UTCTime) -> Topic
 toTopic (tid, SQLClock clock, name, description, updatedAt) =
     Topic (TopicId tid) clock (TopicName name) (TopicDescription <$> description) updatedAt
+
+toUser :: (SQLUserId, Text, ByteString, ByteString, UTCTime) -> User
+toUser (SQLUserId uid, username, salt, hash, createdAt) =
+    User uid (Username username) (PasswordHash (Salt salt) hash) createdAt
 
 instance Log NoteStoreSQLite where
 
@@ -96,6 +113,46 @@ instance Clock NoteStoreSQLite where
 
     now :: NoteStoreSQLite UTCTime
     now = liftIO getCurrentTime
+
+instance Fresh NoteStoreSQLite where
+
+    freshUserId :: NoteStoreSQLite UserId
+    freshUserId = liftIO (UserId <$> nextRandom)
+
+    freshSalt :: NoteStoreSQLite Salt
+    freshSalt = liftIO (Salt <$> getRandomBytes saltLength)
+
+instance UserStore NoteStoreSQLite where
+
+    createUser :: User -> NoteStoreSQLite (UserCreation ())
+    createUser (User uid (Username username) (PasswordHash (Salt salt) hash) createdAt) = NoteStoreSQLite $ do
+        conn <- ask
+        liftIO $ do
+            execute conn sqlCreateUser (SQLUserId uid, username, salt, hash, createdAt)
+            changes conn <&> \case
+                0 -> UsernameTaken
+                _ -> UserCreated ()
+
+        where
+        sqlCreateUser :: Query
+        sqlCreateUser = [iii|
+            INSERT INTO User (id, username, password_salt, password_hash, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (username) DO NOTHING; |]
+
+    loadUserByName :: Username -> NoteStoreSQLite (Maybe User)
+    loadUserByName (Username username) = NoteStoreSQLite $ do
+        conn <- ask
+        liftIO $
+            listToMaybe . map toUser
+                <$> query conn sqlLoadUserByName (Only username)
+
+        where
+        sqlLoadUserByName :: Query
+        sqlLoadUserByName = [iii|
+            SELECT id, username, password_salt, password_hash, created_at
+            FROM User
+            WHERE username = ?; |]
 
 instance NoteStore NoteStoreSQLite where
 

@@ -10,6 +10,7 @@ import qualified Data.Vector     as V
 import           Data.Word       (Word32)
 import           Test.Hspec
 
+import Auth.Password
 import NoteStore.Class
 import NoteStore.SQLite.NoteStoreSQLite
 import NoteStorePure
@@ -21,6 +22,22 @@ main = hspec $ do
     noteStoreSpec "NoteStorePure" (pure . run)
     noteStoreSpec "NoteStoreSQLite" (runNoteStoreSQLite ":memory:")
     notesAppSpec
+    passwordSpec
+
+passwordSpec :: Spec
+passwordSpec = describe "Auth.Password" $ do
+
+    it "verifies the password it hashed" $
+        verifyPassword (Password "hunter22") (hashPassword pureSalt (Password "hunter22"))
+            `shouldBe` True
+
+    it "rejects a different password" $
+        verifyPassword (Password "hunter23") (hashPassword pureSalt (Password "hunter22"))
+            `shouldBe` False
+
+    it "hashes the same password differently under a different salt" $
+        hashPassword (Salt "another-salt-16b") (Password "hunter22")
+            `shouldNotBe` hashPassword pureSalt (Password "hunter22")
 
 notesAppSpec :: Spec
 notesAppSpec = describe "NotesApp" $ do
@@ -182,9 +199,53 @@ notesAppSpec = describe "NotesApp" $ do
                 deleteTopicFor aliceU aliceD topicX (clock [(alice, 0)]) topicY)
             `shouldBe` TopicRefused NoSuchDestination
 
+    it "registers a user, storing a hash their password verifies against" $
+        let r = run (do c <- register (Username "alice") (Password "hunter22")
+                        u <- loadUserByName (Username "alice")
+                        pure (c, u))
+        in case r of
+            (UserCreated created, Just stored@(User _ name hash at)) -> do
+                created `shouldBe` stored
+                (name, at) `shouldBe` (Username "alice", pureNow)
+                verifyPassword (Password "hunter22") hash `shouldBe` True
+            other -> expectationFailure ("unexpected: " <> show other)
+
+    it "stores the username trimmed" $
+        run (do _ <- register (Username "  alice ") (Password "hunter22")
+                fmap (\(User _ n _ _) -> n) <$> loadUserByName (Username "alice"))
+            `shouldBe` Just (Username "alice")
+
+    it "gives each user their own id" $
+        run (do a <- register (Username "alice") (Password "hunter22")
+                b <- register (Username "bob") (Password "hunter22")
+                pure (userIdOf <$> a, userIdOf <$> b))
+            `shouldSatisfy` \case
+                (UserCreated a, UserCreated b) -> a /= b
+                _                              -> False
+
+    it "reports a taken username, keeping the first user's password" $
+        run (do _ <- register (Username "alice") (Password "hunter22")
+                r <- register (Username " alice") (Password "different")
+                u <- loadUserByName (Username "alice")
+                pure (() <$ r, (\(User _ _ h _) -> verifyPassword (Password "hunter22") h) <$> u))
+            `shouldBe` (UsernameTaken, Just True)
+
+    it "refuses a blank username" $
+        run ((() <$) <$> register (Username "  ") (Password "hunter22"))
+            `shouldBe` UserRefused BlankUsername
+
+    it "refuses an empty password" $
+        run (do r <- register (Username "alice") (Password "")
+                (,) ((() <$) r) <$> loadUserByName (Username "alice"))
+            `shouldBe` (UserRefused EmptyPassword, Nothing)
+
+    it "accepts a one character password" $
+        run ((() <$) <$> register (Username "alice") (Password "x"))
+            `shouldBe` UserCreated ()
+
 -- | Runs the same spec against each 'NoteStore' implementation, so the SQL
 -- conflict check is held to the same semantics as 'isNewerThan'.
-noteStoreSpec :: NoteStore m => String -> (forall a. m a -> IO a) -> Spec
+noteStoreSpec :: (NoteStore m, UserStore m) => String -> (forall a. m a -> IO a) -> Spec
 noteStoreSpec name run' = describe name $ do
 
     it "loads nothing from an empty store" $
@@ -444,6 +505,26 @@ noteStoreSpec name run' = describe name $ do
                   ]
                 )
 
+    it "loads no user for an unknown username" $
+        run' (loadUserByName (Username "alice")) `shouldReturn` Nothing
+
+    it "creates a user and loads them back by username" $
+        run' (do c <- createUser (user aliceU "alice")
+                 (,) c <$> loadUserByName (Username "alice"))
+            `shouldReturn` (UserCreated (), Just (user aliceU "alice"))
+
+    it "refuses a second user with a taken username, keeping the first" $
+        run' (do _ <- createUser (user aliceU "alice")
+                 c <- createUser (user bobU "alice")
+                 (,) c <$> loadUserByName (Username "alice"))
+            `shouldReturn` (UsernameTaken, Just (user aliceU "alice"))
+
+    it "matches usernames exactly" $
+        run' (do _ <- createUser (user aliceU "alice")
+                 c <- createUser (user bobU "Alice")
+                 (,) c <$> loadUserByName (Username "Alice"))
+            `shouldReturn` (UserCreated (), Just (user bobU "Alice"))
+
 run :: NoteStorePure a -> a
 run m = runNoteStorePure m emptyStore
 
@@ -471,6 +552,13 @@ noteIn tid nid entries content =
 movedIn :: TopicId -> NoteId -> [(UserDevice, Int)] -> Text -> Note
 movedIn tid nid entries content =
     Note nid (clock entries) defTitle (Content content) defColorIndex defShowFull tid later
+
+user :: UserId -> Text -> User
+user uid name =
+    User uid (Username name) (PasswordHash (Salt "salt-for-tests!!") "not a real hash") pureNow
+
+userIdOf :: User -> UserId
+userIdOf (User uid _ _ _) = uid
 
 later :: UTCTime
 later = UTCTime (fromGregorian 2026 1 2) 0
