@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'auth.dart';
 import 'note.dart';
 import 'store/note_store.dart';
 import 'topic.dart';
 
 class NotesScreen extends StatefulWidget {
-  const NotesScreen({super.key, required this.store});
+  const NotesScreen({super.key, required this.store, this.auth});
 
   final NoteStore store;
+  final AuthSession? auth;
 
   @override
   State<NotesScreen> createState() => _NotesScreenState();
@@ -288,6 +290,7 @@ class _NotesScreenState extends State<NotesScreen> {
     children: [
       _Sidebar(
         store: store,
+        auth: widget.auth,
         open: _sidebarOpen,
         selectedTopicId: _topicId,
         checkedTopicIds: _selectedTopics,
@@ -360,6 +363,7 @@ class _NotesScreenState extends State<NotesScreen> {
 class _Sidebar extends StatelessWidget {
   const _Sidebar({
     required this.store,
+    required this.auth,
     required this.open,
     required this.selectedTopicId,
     required this.onSelect,
@@ -372,6 +376,9 @@ class _Sidebar extends StatelessWidget {
 
   final NoteStore store;
   final bool open;
+
+  /// Shown at the bottom for logging in and out, unless null.
+  final AuthSession? auth;
 
   /// The selected topic's id, or null when "(All)" is selected.
   final String? selectedTopicId;
@@ -510,12 +517,165 @@ class _Sidebar extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (auth case final auth?) ...[
+                    Divider(height: 1, color: scheme.outlineVariant),
+                    _UserSection(auth: auth),
+                  ],
                 ],
               ),
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The logged-in user with a way to log out, or a way to log in.
+class _UserSection extends StatelessWidget {
+  const _UserSection({required this.auth});
+
+  final AuthSession auth;
+
+  Future<void> _logOut(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Log out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed ?? false) await auth.logOut();
+  }
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder(
+    valueListenable: auth.account,
+    builder: (context, account, _) => account == null
+        ? ListTile(
+            leading: const Icon(Icons.login),
+            title: const Text('Log in'),
+            onTap: () => showDialog<void>(
+              context: context,
+              builder: (_) => _LoginDialog(auth: auth),
+            ),
+          )
+        : ListTile(
+            leading: CircleAvatar(
+              radius: 14,
+              child: Text(account.username.characters.first.toUpperCase()),
+            ),
+            title: Text(
+              account.username,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailing: IconButton(
+              icon: const Icon(Icons.logout),
+              tooltip: 'Log out',
+              onPressed: () => _logOut(context),
+            ),
+          ),
+  );
+}
+
+/// Asks for a username and password and logs in with them, staying open
+/// with an error if that fails.
+class _LoginDialog extends StatefulWidget {
+  const _LoginDialog({required this.auth});
+
+  final AuthSession auth;
+
+  @override
+  State<_LoginDialog> createState() => _LoginDialogState();
+}
+
+class _LoginDialogState extends State<_LoginDialog> {
+  final _username = TextEditingController();
+  final _password = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _username.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
+  bool get _complete =>
+      _username.text.trim().isNotEmpty && _password.text.isNotEmpty;
+
+  Future<void> _submit() async {
+    if (!_complete || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.auth.logIn(_username.text.trim(), _password.text);
+      if (mounted) Navigator.pop(context);
+    } on WrongCredentials {
+      if (mounted) setState(() => _error = 'Wrong username or password');
+    } on Exception catch (e) {
+      debugPrint('Login failed: $e');
+      if (mounted) setState(() => _error = "Couldn't reach the server");
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Log in'),
+      content: AutofillGroup(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _username,
+              autofocus: true,
+              enabled: !_busy,
+              autofillHints: const [AutofillHints.username],
+              decoration: const InputDecoration(labelText: 'Username'),
+              textInputAction: TextInputAction.next,
+              onChanged: (_) => setState(() {}),
+            ),
+            TextField(
+              controller: _password,
+              enabled: !_busy,
+              obscureText: true,
+              autofillHints: const [AutofillHints.password],
+              decoration: InputDecoration(
+                labelText: 'Password',
+                errorText: _error,
+              ),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => _submit(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _complete && !_busy ? _submit : null,
+          child: const Text('Log in'),
+        ),
+      ],
     );
   }
 }

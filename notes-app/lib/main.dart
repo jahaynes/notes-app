@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'auth.dart';
 import 'editor_screen.dart';
 import 'note.dart';
 import 'notes_screen.dart';
@@ -29,13 +30,20 @@ Future<void> main() async {
           prefs,
           userId: _notesUser.isEmpty ? null : _notesUser,
         );
-  runApp(NoteishApp(store: store));
+  final auth = _notesApi.isEmpty
+      ? null
+      : AuthSession(http.Client(), Uri.parse(_notesApi), prefs);
+  await auth?.restore();
+  runApp(NoteishApp(store: store, auth: auth));
 }
 
 class NoteishApp extends StatefulWidget {
-  const NoteishApp({super.key, required this.store});
+  const NoteishApp({super.key, required this.store, this.auth});
 
   final NoteStore store;
+
+  /// Logging in to the Notes API, or null when notes are kept on the device.
+  final AuthSession? auth;
 
   @override
   State<NoteishApp> createState() => _NoteishAppState();
@@ -48,7 +56,7 @@ class _NoteishAppState extends State<NoteishApp> {
     routes: [
       GoRoute(
         path: '/',
-        builder: (_, _) => NotesScreen(store: widget.store),
+        builder: (_, _) => NotesScreen(store: widget.store, auth: widget.auth),
         routes: [
           GoRoute(
             path: 'new',
