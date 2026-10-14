@@ -1,7 +1,7 @@
 module Main (main) where
 
 import Auth.Token                       (loadSigningKey)
-import Controller                       (app)
+import Controller.Controller            (app)
 import NoteStore.SQLite.NoteStoreSQLite (runNoteStoreSQLite)
 
 import Data.Function            ((&))

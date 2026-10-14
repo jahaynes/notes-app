@@ -48,7 +48,10 @@ library
     import:           common
     exposed-modules:  Auth.Password
                       Auth.Token
-                      Controller
+                      Controller.Controller
+                      Controller.ControllerTypes
+                      Controller.OpenApi
+                      Controller.Routes
                       NotesApp
                       NoteStore.Class
                       NoteStore.SQLite.NoteStoreSQLite
