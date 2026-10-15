@@ -60,6 +60,16 @@ void main() {
     expect(stale.token, isNull);
   });
 
+  test('a turned-down token logs out, unless it is an old one', () async {
+    final auth = await _session({'auth_token_v1': 'good'});
+    await auth.rejected('older');
+    expect(auth.account.value?.username, 'john');
+
+    await auth.rejected('good');
+    expect(auth.account.value, isNull);
+    expect(auth.token, isNull);
+  });
+
   testWidgets('notes open as whoever logs in, and logging out leaves them', (
     tester,
   ) async {

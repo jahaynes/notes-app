@@ -30,7 +30,14 @@ Future<void> main() async {
   runApp(
     LoggedInApp(
       auth: auth,
-      openStore: (login) => HttpNoteStore.open(client, baseUri, prefs, login),
+      // A turned-down token logs out, which goes back to the login screen.
+      openStore: (login) => HttpNoteStore.open(
+        client,
+        baseUri,
+        prefs,
+        login,
+        onRejected: () => auth.rejected(login.token),
+      ),
     ),
   );
 }

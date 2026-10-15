@@ -13,9 +13,15 @@ const _token = 'token-1';
 
 /// A Notes API that accepts every PUT, holding NoteViews and TopicViews. A
 /// DELETE goes through only if its clock has seen every write to the note or
-/// topic, and a topic DELETE is refused as the real one refuses it. A note
-/// PUT needs [_token], which belongs to [_user].
+/// topic, and a topic DELETE is refused as the real one refuses it. Every
+/// request needs [_token], which belongs to [_user] until it [expired], and
+/// a note PUT must be for that user.
 class _Backend {
+  var expired = false;
+
+  /// How many times the store was told its token was turned down.
+  var rejections = 0;
+
   final notes = <String, Map<String, dynamic>>{};
   final topics = <String, Map<String, dynamic>>{};
   final notePuts = <Map<String, dynamic>>[];
@@ -51,6 +57,9 @@ class _Backend {
   }
 
   late final client = MockClient((request) async {
+    if (expired || request.headers['Authorization'] != 'Bearer $_token') {
+      return http.Response('', 401);
+    }
     final path = request.url.pathSegments;
     switch ((request.method, path)) {
       case ('GET', ['user', _, 'topics']):
@@ -73,9 +82,6 @@ class _Backend {
         };
         return http.Response('', 204);
       case ('PUT', ['note', final id]):
-        if (request.headers['Authorization'] != 'Bearer $_token') {
-          return http.Response('', 401);
-        }
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         if (body['userId'] != _user) return http.Response('', 403);
         notePuts.add(body);
@@ -151,6 +157,7 @@ Future<HttpNoteStore> _open(_Backend backend) async {
     Uri.parse('http://notes.test/'),
     await SharedPreferences.getInstance(),
     (userId: _user, token: _token),
+    onRejected: () => backend.rejections++,
   );
 }
 
@@ -173,6 +180,21 @@ void main() {
       'device_v1',
     );
     expect(backend.notePuts.single['clock'], {'$_user:$device': 1});
+  });
+
+  test('a turned-down token is reported', () async {
+    final backend = _Backend()..putElsewhere('a', title: 'A');
+    final store = await _open(backend);
+    expect(backend.rejections, 0);
+
+    backend.expired = true;
+    await expectLater(
+      store.refreshNote('a'),
+      throwsA(
+        isA<NotesApiException>().having((e) => e.statusCode, 'status', 401),
+      ),
+    );
+    expect(backend.rejections, 1);
   });
 
   test('flush writes held-back edits straight away', () async {

@@ -31,7 +31,7 @@ class NotesApiException implements Exception {
 ///
 /// This device's id lives in SharedPreferences. The user is whoever logged
 /// in with the [Login] the store was opened with: their id goes in request
-/// bodies, and note writes carry their token.
+/// bodies, and every request carries their token.
 ///
 /// Deleting a topic is sent straight away rather than held back, and the
 /// backend moves the topic's notes itself.
@@ -45,20 +45,22 @@ class HttpNoteStore extends NoteStore {
     List<Note> notes,
     this._clocks,
     this._topicClocks,
-    this._login,
   ) : _topics = ValueNotifier(topics),
       _notes = ValueNotifier(notes),
       _synced = {for (final n in notes) n.id: n};
 
   /// Loads the topics and notes of the user who logged in with [login]
   /// from the backend at [baseUri]. Their default topic shares their id, so
-  /// that any device can find it.
+  /// that any device can find it. Requests go through [inner], and
+  /// [onRejected] is called whenever the backend turns down the token.
   static Future<HttpNoteStore> open(
-    http.Client client,
+    http.Client inner,
     Uri baseUri,
     SharedPreferences prefs,
-    Login login,
-  ) async {
+    Login login, {
+    required void Function() onRejected,
+  }) async {
+    final client = _BearerClient(inner, login.token, onRejected);
     final user = User(
       id: login.userId,
       defaultTopic: Topic(id: login.userId, name: 'Uncategorised'),
@@ -112,7 +114,6 @@ class HttpNoteStore extends NoteStore {
       _sorted(notes),
       clocks,
       topicClocks,
-      login,
     );
   }
 
@@ -125,7 +126,6 @@ class HttpNoteStore extends NoteStore {
   final http.Client _client;
   final Uri _baseUri;
   final String _deviceId;
-  final Login _login;
 
   @override
   final User user;
@@ -478,10 +478,7 @@ class HttpNoteStore extends NoteStore {
     final path = 'note/${note.id}';
     final response = await _client.put(
       _baseUri.resolve(path),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ${_login.token}',
-      },
+      headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({
         'userId': user.id,
         'deviceId': _deviceId,
@@ -664,6 +661,24 @@ class HttpNoteStore extends NoteStore {
   static List<Note> _sorted(List<Note> notes) => List.unmodifiable(
     notes..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)),
   );
+}
+
+/// Sends every request with [_token] as its bearer token, calling
+/// [_onRejected] each time the backend answers 401.
+class _BearerClient extends http.BaseClient {
+  _BearerClient(this._inner, this._token, this._onRejected);
+
+  final http.Client _inner;
+  final String _token;
+  final void Function() _onRejected;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    request.headers['Authorization'] = 'Bearer $_token';
+    final response = await _inner.send(request);
+    if (response.statusCode == 401) _onRejected();
+    return response;
+  }
 }
 
 /// What [HttpNoteStore] sends the backend for a note.

@@ -88,6 +88,13 @@ class AuthSession {
     _account.value = account;
   }
 
+  /// Logs out if [token] is still the one in use, as the backend has turned
+  /// it down, e.g. it has expired. A token from an earlier login is
+  /// ignored, as requests made with it can still be finishing.
+  Future<void> rejected(String token) async {
+    if (this.token == token) await logOut();
+  }
+
   Future<void> logOut() async {
     await _prefs.remove(_tokenKey);
     _account.value = null;
