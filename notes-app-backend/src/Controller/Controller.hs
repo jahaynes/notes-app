@@ -87,10 +87,18 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                 UserRefused refusal -> respond (WithStatus @422 refusal)
 
         topicsForUserHandler :: NoteStore m => UserId -> ServerT TopicsForUser m
-        topicsForUserHandler uid = map toTopicView . V.toList <$> topicsFor uid
+        topicsForUserHandler uid authUid
+            | uid /= authUid =
+                respond (WithStatus @403 NoBody)
+            | otherwise =
+                topicsFor uid >>= respond . WithStatus @200 . map toTopicView . V.toList
 
         addTopicHandler :: NoteStore m => UserId -> TopicId -> ServerT AddTopic m
-        addTopicHandler uid tid = NoContent <$ addTopic uid tid
+        addTopicHandler uid tid authUid
+            | uid /= authUid =
+                respond (WithStatus @403 NoBody)
+            | otherwise =
+                addTopic uid tid >> respond (WithStatus @204 NoBody)
 
     topicServer :: (NoteStore m, Log m, Clock m) => ServerT TopicAPI m
     topicServer = (\tid -> storeTopicHandler tid :<|> deleteTopicHandler tid)
@@ -98,27 +106,33 @@ storeServer = userServer :<|> topicServer :<|> noteServer
 
         where
         deleteTopicHandler :: (NoteStore m, Log m, Clock m) => TopicId -> ServerT DeleteTopic m
-        deleteTopicHandler tid (DeleteTopicRequest uid did vc dest) =
-            deleteTopicFor uid did tid vc dest >>= \case
-                TopicDeleted          -> respond (WithStatus @204 NoBody)
-                TopicConflicted topic -> respond (WithStatus @409 (toTopicView topic))
-                TopicRefused refusal  -> respond (WithStatus @422 refusal)
+        deleteTopicHandler tid authUid (DeleteTopicRequest uid did vc dest)
+            | uid /= authUid =
+                respond (WithStatus @403 NoBody)
+            | otherwise =
+                deleteTopicFor uid did tid vc dest >>= \case
+                    TopicDeleted          -> respond (WithStatus @204 NoBody)
+                    TopicConflicted topic -> respond (WithStatus @409 (toTopicView topic))
+                    TopicRefused refusal  -> respond (WithStatus @422 refusal)
 
         storeTopicHandler :: (NoteStore m, Log m, Clock m) => TopicId -> ServerT StoreTopic m
-        storeTopicHandler tid (StoreTopicRequest uid did mVc n d) =
-            storeTopicFor uid did tid mVc n d >>= \case
-                Nothing    -> respond (WithStatus @204 NoBody)
-                Just topic -> respond (WithStatus @409 (toTopicView topic))
+        storeTopicHandler tid authUid (StoreTopicRequest uid did mVc n d)
+            | uid /= authUid =
+                respond (WithStatus @403 NoBody)
+            | otherwise =
+                storeTopicFor uid did tid mVc n d >>= \case
+                    Nothing    -> respond (WithStatus @204 NoBody)
+                    Just topic -> respond (WithStatus @409 (toTopicView topic))
 
         notesForTopicHandler :: NoteStore m => TopicId -> ServerT NotesForTopic m
-        notesForTopicHandler tid = map toView . V.toList <$> notesFor tid
+        notesForTopicHandler tid _ = map toView . V.toList <$> notesFor tid
 
     noteServer :: (NoteStore m, Log m, Clock m) => ServerT NoteAPI m
     noteServer = \nid -> loadHandler nid :<|> storeHandler nid :<|> deleteHandler nid
 
         where
         loadHandler :: NoteStore m => NoteId -> ServerT LoadNote m
-        loadHandler nid =
+        loadHandler nid _ =
             load nid >>= \case
                 Just note -> respond (WithStatus @200 (toView note))
                 Nothing   -> respond (WithStatus @404 NoBody)
@@ -133,7 +147,7 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                     Just note -> respond (WithStatus @409 (toView note))
 
         deleteHandler :: (NoteStore m, Log m) => NoteId -> ServerT DeleteNote m
-        deleteHandler nid (DeleteRequest vc) =
+        deleteHandler nid _ (DeleteRequest vc) =
             delete nid vc >>= \case
                 Nothing   -> respond (WithStatus @204 NoBody)
                 Just note -> respond (WithStatus @409 (toView note))

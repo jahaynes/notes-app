@@ -53,9 +53,10 @@ type Me =
                         ]
 
 type LoadNote =
-    UVerb 'GET '[JSON] '[ WithStatus 200 NoteView
-                        , WithStatus 404 NoBody
-                        ]
+    JwtAuth
+        :> UVerb 'GET '[JSON] '[ WithStatus 200 NoteView
+                               , WithStatus 404 NoBody
+                               ]
 
 type StoreNote =
     JwtAuth :> ReqBody '[JSON] StoreRequest
@@ -65,29 +66,37 @@ type StoreNote =
                                ]
 
 type StoreTopic =
-    ReqBody '[JSON] StoreTopicRequest
+    JwtAuth :> ReqBody '[JSON] StoreTopicRequest
         :> UVerb 'PUT '[JSON] '[ WithStatus 204 NoBody
+                               , WithStatus 403 NoBody
                                , WithStatus 409 TopicView
                                ]
 
 type DeleteTopic =
-    ReqBody '[JSON] DeleteTopicRequest
+    JwtAuth :> ReqBody '[JSON] DeleteTopicRequest
         :> UVerb 'DELETE '[JSON] '[ WithStatus 204 NoBody
+                                  , WithStatus 403 NoBody
                                   , WithStatus 409 TopicView
                                   , WithStatus 422 TopicRefusal
                                   ]
 
 type DeleteNote =
-    ReqBody '[JSON] DeleteRequest
+    JwtAuth :> ReqBody '[JSON] DeleteRequest
         :> UVerb 'DELETE '[JSON] '[ WithStatus 204 NoBody
                                   , WithStatus 409 NoteView
                                   ]
 
 type NotesForTopic =
-    Get '[JSON] [NoteView]
+    JwtAuth :> Get '[JSON] [NoteView]
 
 type TopicsForUser =
-    Get '[JSON] [TopicView]
+    JwtAuth
+        :> UVerb 'GET '[JSON] '[ WithStatus 200 [TopicView]
+                               , WithStatus 403 NoBody
+                               ]
 
 type AddTopic =
-    PutNoContent
+    JwtAuth
+        :> UVerb 'PUT '[JSON] '[ WithStatus 204 NoBody
+                               , WithStatus 403 NoBody
+                               ]
