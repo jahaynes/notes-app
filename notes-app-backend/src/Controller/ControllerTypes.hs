@@ -14,8 +14,6 @@ import           GHC.Generics                     (Generic)
 import           Servant                          (JSON, MimeRender (..))
 import           Web.FormUrlEncoded               (FromForm)
 
--- An empty response body. Stands in for servant's NoContent in UVerb responses,
--- which need a ToSchema instance we can't give NoContent without an orphan
 data NoBody = NoBody
 
 instance MimeRender JSON NoBody where

@@ -22,7 +22,6 @@ import           Servant
 import           Servant.OpenApi                  (HasOpenApi (..))
 import           Servant.Server.Experimental.Auth (AuthServerData)
 
--- Our own tag for AuthProtect, so the instances below aren't orphans
 data Jwt
 
 type JwtAuth = AuthProtect Jwt
