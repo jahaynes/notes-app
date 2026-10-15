@@ -15,7 +15,6 @@ import           Crypto.Random              (getRandomBytes)
 import           Control.Monad.IO.Class     (MonadIO (liftIO))
 import           Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
 import           Data.ByteString            (ByteString)
-import           Data.Functor               ((<&>))
 import           Data.Maybe                 (listToMaybe)
 import           Data.String.Interpolate    (iii)
 import           Data.Text                  (Text)
@@ -85,14 +84,14 @@ sqlAddUserTopic = [iii|
     INSERT OR IGNORE INTO UserTopic (user_id, topic_id)
     VALUES (?, ?); |]
 
-toNote :: (SQLNoteId, Text, SQLClock, Text, Int, Bool, Text, UTCTime) -> Note
-toNote (SQLNoteId nid, value, SQLClock clock, title, colorIndex, showFull, topicId, updatedAt) =
+toNote :: (SQLNoteId, Text, SQLClock, Text, Int, Bool, SQLTopicId, UTCTime) -> Note
+toNote (SQLNoteId nid, value, SQLClock clock, title, colorIndex, showFull, SQLTopicId topicId, updatedAt) =
     Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
-         showFull (TopicId topicId) updatedAt
+         showFull topicId updatedAt
 
-toTopic :: (Text, SQLClock, Text, Maybe Text, UTCTime) -> Topic
-toTopic (tid, SQLClock clock, name, description, updatedAt) =
-    Topic (TopicId tid) clock (TopicName name) (TopicDescription <$> description) updatedAt
+toTopic :: (SQLTopicId, SQLClock, Text, Maybe Text, UTCTime) -> Topic
+toTopic (SQLTopicId tid, SQLClock clock, name, description, updatedAt) =
+    Topic tid clock (TopicName name) (TopicDescription <$> description) updatedAt
 
 toUser :: (SQLUserId, Text, ByteString, ByteString, UTCTime) -> User
 toUser (SQLUserId uid, username, salt, hash, createdAt) =
@@ -119,19 +118,28 @@ instance Fresh NoteStoreSQLite where
     freshUserId :: NoteStoreSQLite UserId
     freshUserId = liftIO (UserId <$> nextRandom)
 
+    freshTopicId :: NoteStoreSQLite TopicId
+    freshTopicId = liftIO (TopicId <$> nextRandom)
+
     freshSalt :: NoteStoreSQLite Salt
     freshSalt = liftIO (Salt <$> getRandomBytes saltLength)
 
 instance UserStore NoteStoreSQLite where
 
-    createUser :: User -> NoteStoreSQLite (UserCreation ())
-    createUser (User uid (Username username) (PasswordHash (Salt salt) hash) createdAt) = NoteStoreSQLite $ do
+    createUser :: User -> Topic -> NoteStoreSQLite (UserCreation ())
+    createUser (User uid (Username username) (PasswordHash (Salt salt) hash) createdAt)
+               (Topic tid clock (TopicName name) mDescription updatedAt) = NoteStoreSQLite $ do
         conn <- ask
-        liftIO $ do
+        liftIO . withTransaction conn $ do
             execute conn sqlCreateUser (SQLUserId uid, username, salt, hash, createdAt)
-            changes conn <&> \case
-                0 -> UsernameTaken
-                _ -> UserCreated ()
+            changes conn >>= \case
+                0 -> pure UsernameTaken
+                _ -> do
+                    execute conn sqlCreateTopic ( SQLTopicId tid, SQLClock clock, name
+                                                , (\(TopicDescription d) -> d) <$> mDescription
+                                                , updatedAt )
+                    execute conn sqlAddUserTopic (SQLUserId uid, SQLTopicId tid)
+                    pure (UserCreated ())
 
         where
         sqlCreateUser :: Query
@@ -139,6 +147,11 @@ instance UserStore NoteStoreSQLite where
             INSERT INTO User (id, username, password_salt, password_hash, created_at)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT (username) DO NOTHING; |]
+
+        sqlCreateTopic :: Query
+        sqlCreateTopic = [iii|
+            INSERT INTO Topic (id, clock, name, description, updated_at)
+            VALUES (?, ?, ?, ?, ?); |]
 
     loadUser :: UserId -> NoteStoreSQLite (Maybe User)
     loadUser uid = NoteStoreSQLite $ do
@@ -174,7 +187,7 @@ instance NoteStore NoteStoreSQLite where
     topicsForUser uid = NoteStoreSQLite $ do
         conn <- ask
         liftIO $
-            V.fromList . map (\(Only tid) -> TopicId tid)
+            V.fromList . map (\(Only (SQLTopicId tid)) -> tid)
                 <$> query conn sqlTopicsForUser (Only (SQLUserId uid))
 
         where
@@ -202,16 +215,16 @@ instance NoteStore NoteStoreSQLite where
             ORDER BY Topic.id; |]
 
     addTopicForUser :: UserId -> TopicId -> NoteStoreSQLite ()
-    addTopicForUser uid (TopicId tid) = NoteStoreSQLite $ do
+    addTopicForUser uid tid = NoteStoreSQLite $ do
         conn <- ask
-        liftIO $ execute conn sqlAddUserTopic (SQLUserId uid, tid)
+        liftIO $ execute conn sqlAddUserTopic (SQLUserId uid, SQLTopicId tid)
 
     loadTopic :: TopicId -> NoteStoreSQLite (Maybe Topic)
-    loadTopic (TopicId tid) = NoteStoreSQLite $ do
+    loadTopic tid = NoteStoreSQLite $ do
         conn <- ask
         liftIO $
             listToMaybe . map toTopic
-                <$> query conn sqlLoadTopic (Only tid)
+                <$> query conn sqlLoadTopic (Only (SQLTopicId tid))
 
         where
         sqlLoadTopic :: Query
@@ -221,16 +234,16 @@ instance NoteStore NoteStoreSQLite where
             WHERE id = ?; |]
 
     storeTopic :: UserId -> Topic -> NoteStoreSQLite Written
-    storeTopic uid (Topic (TopicId tid) clock (TopicName name) mDescription updatedAt) = NoteStoreSQLite $ do
+    storeTopic uid (Topic tid clock (TopicName name) mDescription updatedAt) = NoteStoreSQLite $ do
         conn <- ask
         liftIO . withTransaction conn $ do
-            execute conn sqlStoreTopic ( tid, SQLClock clock, name
+            execute conn sqlStoreTopic ( SQLTopicId tid, SQLClock clock, name
                                        , (\(TopicDescription d) -> d) <$> mDescription
                                        , updatedAt )
             changes conn >>= \case
                 0 -> pure Conflicted
                 _ -> do
-                    execute conn sqlAddUserTopic (SQLUserId uid, tid)
+                    execute conn sqlAddUserTopic (SQLUserId uid, SQLTopicId tid)
                     pure Clean
 
         where
@@ -257,31 +270,31 @@ instance NoteStore NoteStoreSQLite where
 
     deleteTopic :: UserDevice -> UTCTime -> TopicId -> VectorClock -> TopicId
                 -> NoteStoreSQLite (TopicDeletion ())
-    deleteTopic ud@(UserDevice uid _) updatedAt (TopicId tid) clock (TopicId dest) = NoteStoreSQLite $ do
+    deleteTopic ud@(UserDevice uid _) updatedAt tid clock dest = NoteStoreSQLite $ do
         conn <- ask
         liftIO . withTransaction conn $ do
 
-            destExists <- not . null <$> (query conn sqlTopicExists (Only dest) :: IO [Only Int])
-            [Only sharedWithNotes] <- query conn sqlSharedWithNotes (tid, tid)
+            destExists <- not . null <$> (query conn sqlTopicExists (Only (SQLTopicId dest)) :: IO [Only Int])
+            [Only sharedWithNotes] <- query conn sqlSharedWithNotes (SQLTopicId tid, SQLTopicId tid)
 
             if | dest == tid || not destExists -> pure (TopicRefused NoSuchDestination)
                | sharedWithNotes               -> pure (TopicRefused SharedWithNotes)
                | otherwise -> do
-                    execute conn sqlDeleteTopic (tid, SQLClock clock)
+                    execute conn sqlDeleteTopic (SQLTopicId tid, SQLClock clock)
                     changes conn >>= \case
-                        0 -> query conn sqlTopicExists (Only tid) >>= \case
+                        0 -> query conn sqlTopicExists (Only (SQLTopicId tid)) >>= \case
                                  []                -> moveNotes conn
                                  (_ :: [Only Int]) -> pure (TopicConflicted ())
                         _ -> moveNotes conn
 
         where
         moveNotes conn = do
-            moved <- query conn sqlNoteClocksInTopic (Only tid)
+            moved <- query conn sqlNoteClocksInTopic (Only (SQLTopicId tid))
             mapM_ (\(nid :: SQLNoteId, SQLClock vc) ->
-                       execute conn sqlMoveNote (dest, SQLClock (tick ud vc), updatedAt, nid))
+                       execute conn sqlMoveNote (SQLTopicId dest, SQLClock (tick ud vc), updatedAt, nid))
                   moved
-            execute conn sqlRevokeTopic (Only tid)
-            execute conn sqlAddUserTopic (SQLUserId uid, dest)
+            execute conn sqlRevokeTopic (Only (SQLTopicId tid))
+            execute conn sqlAddUserTopic (SQLUserId uid, SQLTopicId dest)
             pure TopicDeleted
 
         sqlTopicExists :: Query
@@ -329,11 +342,11 @@ instance NoteStore NoteStoreSQLite where
             WHERE topic_id = ?; |]
 
     notesForTopic :: TopicId -> NoteStoreSQLite (Vector Note)
-    notesForTopic (TopicId tid) = NoteStoreSQLite $ do
+    notesForTopic tid = NoteStoreSQLite $ do
         conn <- ask
         liftIO $
             V.fromList . map toNote
-                <$> query conn sqlNotesForTopic (Only tid)
+                <$> query conn sqlNotesForTopic (Only (SQLTopicId tid))
 
         where
         sqlNotesForTopic :: Query
@@ -359,15 +372,15 @@ instance NoteStore NoteStoreSQLite where
 
     storeNote :: UserId -> Note -> NoteStoreSQLite Written
     storeNote uid (Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
-                        showFull (TopicId topicId) updatedAt) = NoteStoreSQLite $ do
+                        showFull topicId updatedAt) = NoteStoreSQLite $ do
         conn <- ask
         liftIO . withTransaction conn $ do
             execute conn sqlStoreNote ( SQLNoteId nid, value, SQLClock clock
-                                      , title, colorIndex, showFull, topicId, updatedAt )
+                                      , title, colorIndex, showFull, SQLTopicId topicId, updatedAt )
             changes conn >>= \case
                 0 -> pure Conflicted
                 _ -> do
-                    execute conn sqlAddUserTopic (SQLUserId uid, topicId)
+                    execute conn sqlAddUserTopic (SQLUserId uid, SQLTopicId topicId)
                     pure Clean
 
         where

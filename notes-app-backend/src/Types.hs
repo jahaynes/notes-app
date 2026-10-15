@@ -127,7 +127,7 @@ newtype ColorIndex
         deriving (Eq, Show, ToJSON, FromJSON, ToSchema)
 
 newtype TopicId
-    = TopicId Text
+    = TopicId UUID
         deriving (Eq, Ord, Show, ToJSON, FromJSON, ToSchema, FromHttpApiData, ToParamSchema)
 
 data Topic

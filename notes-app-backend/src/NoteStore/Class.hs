@@ -30,7 +30,7 @@ class Monad m => NoteStore m where
 
 class Monad m => UserStore m where
 
-    createUser :: User -> m (UserCreation ())
+    createUser :: User -> Topic -> m (UserCreation ())
 
     loadUser :: UserId -> m (Maybe User)
 
@@ -39,6 +39,8 @@ class Monad m => UserStore m where
 class Fresh m where
 
     freshUserId :: m UserId
+
+    freshTopicId :: m TopicId
 
     freshSalt :: m Salt
 

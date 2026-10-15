@@ -255,13 +255,13 @@ notesAppSpec = describe "NotesApp" $ do
                 fmap (\(User _ n _ _) -> n) <$> loadUserByName (Username "alice"))
             `shouldBe` Just (Username "alice")
 
-    it "gives each user their own id" $
+    it "gives each user their own id and Uncategorised topic" $
         run (do a <- register (Username "alice") (Password "hunter22")
                 b <- register (Username "bob") (Password "hunter22")
-                pure (userIdOf <$> a, userIdOf <$> b))
+                traverse withTopics [a, b])
             `shouldSatisfy` \case
-                (UserCreated a, UserCreated b) -> a /= b
-                _                              -> False
+                [UserCreated (ua, [ta]), UserCreated (ub, [tb])] -> ua /= ub && ta /= tb
+                _                                                -> False
 
     it "reports a taken username, keeping the first user's password" $
         run (do _ <- register (Username "alice") (Password "hunter22")
@@ -278,6 +278,14 @@ notesAppSpec = describe "NotesApp" $ do
         run (do r <- register (Username "alice") (Password "")
                 (,) ((() <$) r) <$> loadUserByName (Username "alice"))
             `shouldBe` (UserRefused EmptyPassword, Nothing)
+
+    it "creates the user's Uncategorised topic, giving them it" $
+        run (register (Username "alice") (Password "hunter22") >>= \case
+                UserCreated (User uid _ _ _) -> topicsList uid >>= traverse loadTopic
+                _                            -> pure [])
+            `shouldSatisfy` \case
+                [Just t@(Topic tid _ _ _ _)] -> t == defaultTopic tid
+                _                            -> False
 
     it "accepts a one character password" $
         run ((() <$) <$> register (Username "alice") (Password "x"))
@@ -563,25 +571,30 @@ noteStoreSpec name run' = describe name $ do
         run' (loadUserByName (Username "alice")) `shouldReturn` Nothing
 
     it "creates a user and loads them back by username" $
-        run' (do c <- createUser (user aliceU "alice")
+        run' (do c <- createUser (user aliceU "alice") (defaultTopic topicX)
                  (,) c <$> loadUserByName (Username "alice"))
             `shouldReturn` (UserCreated (), Just (user aliceU "alice"))
 
-    it "refuses a second user with a taken username, keeping the first" $
-        run' (do _ <- createUser (user aliceU "alice")
-                 c <- createUser (user bobU "alice")
-                 (,) c <$> loadUserByName (Username "alice"))
-            `shouldReturn` (UsernameTaken, Just (user aliceU "alice"))
+    it "creates a user's default topic, giving them it" $
+        run' (do _ <- createUser (user aliceU "alice") (defaultTopic topicX)
+                 (,) <$> (V.toList <$> topicsForUser aliceU) <*> loadTopic topicX)
+            `shouldReturn` ([topicX], Just (defaultTopic topicX))
+
+    it "refuses a second user with a taken username, keeping the first and creating no topic" $
+        run' (do _ <- createUser (user aliceU "alice") (defaultTopic topicX)
+                 c <- createUser (user bobU "alice") (defaultTopic topicY)
+                 (,,) c <$> loadUserByName (Username "alice") <*> loadTopic topicY)
+            `shouldReturn` (UsernameTaken, Just (user aliceU "alice"), Nothing)
 
     it "loads a user back by id" $
-        run' (do _ <- createUser (user aliceU "alice")
-                 _ <- createUser (user bobU "bob")
+        run' (do _ <- createUser (user aliceU "alice") (defaultTopic topicX)
+                 _ <- createUser (user bobU "bob") (defaultTopic topicY)
                  (,) <$> loadUser bobU <*> loadUser (UserId (uuid 99)))
             `shouldReturn` (Just (user bobU "bob"), Nothing)
 
     it "matches usernames exactly" $
-        run' (do _ <- createUser (user aliceU "alice")
-                 c <- createUser (user bobU "Alice")
+        run' (do _ <- createUser (user aliceU "alice") (defaultTopic topicX)
+                 c <- createUser (user bobU "Alice") (defaultTopic topicY)
                  (,) c <$> loadUserByName (Username "Alice"))
             `shouldReturn` (UserCreated (), Just (user bobU "Alice"))
 
@@ -620,6 +633,12 @@ user uid name =
 userIdOf :: User -> UserId
 userIdOf (User uid _ _ _) = uid
 
+withTopics :: UserCreation User -> NoteStorePure (UserCreation (UserId, [TopicId]))
+withTopics = \case
+    UserCreated u -> UserCreated . (,) (userIdOf u) <$> topicsList (userIdOf u)
+    UsernameTaken -> pure UsernameTaken
+    UserRefused r -> pure (UserRefused r)
+
 jwtParts :: Text -> (Text, Text, Text)
 jwtParts token = case T.splitOn "." token of
     [header, claims, signature] -> (header, claims, signature)
@@ -632,6 +651,9 @@ topic :: TopicId -> [(UserDevice, Int)] -> Text -> Topic
 topic tid entries name =
     Topic tid (clock entries) (TopicName name) (Just (TopicDescription "about")) pureNow
 
+defaultTopic :: TopicId -> Topic
+defaultTopic tid = Topic tid (clock []) (TopicName "Uncategorised") Nothing pureNow
+
 defTitle :: Title
 defTitle = Title "title"
 
@@ -642,7 +664,7 @@ defShowFull :: Bool
 defShowFull = False
 
 defTopicId :: TopicId
-defTopicId = TopicId "topic"
+defTopicId = TopicId (uuid 30)
 
 clock :: [(UserDevice, Int)] -> VectorClock
 clock = VectorClock . M.fromList
@@ -656,9 +678,9 @@ noteB = NoteId (uuid 2)
 noteC = NoteId (uuid 3)
 
 topicX, topicY, topicZ :: TopicId
-topicX = TopicId "x"
-topicY = TopicId "y"
-topicZ = TopicId "z"
+topicX = TopicId (uuid 31)
+topicY = TopicId (uuid 32)
+topicZ = TopicId (uuid 33)
 
 aliceU, bobU :: UserId
 aliceU = UserId (uuid 10)

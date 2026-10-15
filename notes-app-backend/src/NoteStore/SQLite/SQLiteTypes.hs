@@ -1,5 +1,6 @@
 module NoteStore.SQLite.SQLiteTypes ( SQLClock (..)
                                     , SQLNoteId (..)
+                                    , SQLTopicId (..)
                                     , SQLUserId (..)
                                     ) where
 
@@ -37,6 +38,18 @@ instance FromField SQLUserId where
     fromField f = fromField f >>= \(t :: Text) ->
         case UUID.fromText t of
             Just u  -> Ok (SQLUserId (UserId u))
+            Nothing -> returnError ConversionFailed f "invalid UUID"
+
+newtype SQLTopicId
+    = SQLTopicId TopicId
+
+instance ToField SQLTopicId where
+    toField (SQLTopicId (TopicId u)) = toField (UUID.toText u)
+
+instance FromField SQLTopicId where
+    fromField f = fromField f >>= \(t :: Text) ->
+        case UUID.fromText t of
+            Just u  -> Ok (SQLTopicId (TopicId u))
             Nothing -> returnError ConversionFailed f "invalid UUID"
 
 newtype SQLClock

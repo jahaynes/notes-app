@@ -39,10 +39,11 @@ instance Clock NoteStorePure where
 pureNow :: UTCTime
 pureNow = UTCTime (fromGregorian 2026 1 1) 0
 
--- | Ids count up from the number of users so far; every salt is the same.
 instance Fresh NoteStorePure where
     freshUserId = NoteStorePure $
         gets (UserId . UUID.fromWords 0 0 1 . fromIntegral . M.size . users)
+    freshTopicId = NoteStorePure $
+        gets (TopicId . UUID.fromWords 0 0 2 . fromIntegral . M.size . topics)
     freshSalt = pure pureSalt
 
 pureSalt :: Salt
@@ -50,15 +51,16 @@ pureSalt = Salt "pure-salt-16byte"
 
 instance UserStore NoteStorePure where
 
-    createUser :: User -> NoteStorePure (UserCreation ())
-    createUser user@(User uid username _ _) = NoteStorePure $
+    createUser :: User -> Topic -> NoteStorePure (UserCreation ())
+    createUser user@(User uid username _ _) topic@(Topic tid _ _ _ _) = NoteStorePure $
 
         gets (byName username . users) >>= \case
 
             Just _ -> pure UsernameTaken
 
             Nothing -> do
-                modify' $ \s -> s { users = M.insert uid user (users s) }
+                modify' $ \(Store ns ts uts us) ->
+                    Store ns (M.insert tid topic ts) (grant uid tid uts) (M.insert uid user us)
                 pure (UserCreated ())
 
     loadUser :: UserId -> NoteStorePure (Maybe User)

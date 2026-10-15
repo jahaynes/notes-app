@@ -39,8 +39,9 @@ notesOpenApi =
                                 \Deleting a topic moves its notes to moveNotesTo, or returns 422 with \
                                 \NoSuchDestination if that topic doesn't exist or is the one being deleted, \
                                 \or SharedWithNotes if the topic still has notes and more than one user. \
-                                \POST /user creates a user, returning 201 with the new user, 409 if the \
-                                \username is taken, or 422 with BlankUsername or EmptyPassword. \
+                                \POST /user creates a user along with a topic of theirs named Uncategorised, \
+                                \returning 201 with the new user, 409 if the username is taken, or 422 with \
+                                \BlankUsername or EmptyPassword. \
                                 \POST /login returns a bearer token, or 401 for a wrong username or password; \
                                 \use Authorize to log in here. Every other endpoint but POST /user needs that token, \
                                 \and returns 403 if the userId in its path or body isn't the token's user."

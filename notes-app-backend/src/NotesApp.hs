@@ -122,12 +122,14 @@ register (Username name) password@(Password plain)
     | otherwise = do
 
         userId    <- freshUserId
+        topicId   <- freshTopicId
         salt      <- freshSalt
         createdAt <- now
 
-        let user = User userId (Username trimmed) (hashPassword salt password) createdAt
+        let user  = User userId (Username trimmed) (hashPassword salt password) createdAt
+            topic = Topic topicId (VectorClock M.empty) uncategorised Nothing createdAt
 
-        creation <- createUser user
+        creation <- createUser user topic
 
         case creation of
             UserCreated () -> lPutStrLn "User created"
@@ -137,6 +139,8 @@ register (Username name) password@(Password plain)
 
     where
     trimmed = T.strip name
+
+    uncategorised = TopicName "Uncategorised"
 
 authenticate :: UserStore m
              => Username -> Password
