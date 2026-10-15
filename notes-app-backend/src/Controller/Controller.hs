@@ -124,10 +124,13 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                 Nothing   -> respond (WithStatus @404 NoBody)
 
         storeHandler :: (NoteStore m, Log m, Clock m) => NoteId -> ServerT StoreNote m
-        storeHandler nid (StoreRequest uid did mVc t c ci sf tid) =
-            store uid did nid mVc t c ci sf tid >>= \case
-                Nothing   -> respond (WithStatus @204 NoBody)
-                Just note -> respond (WithStatus @409 (toView note))
+        storeHandler nid authUid (StoreRequest uid did mVc t c ci sf tid)
+            | uid /= authUid =
+                respond (WithStatus @403 NoBody)
+            | otherwise =
+                store uid did nid mVc t c ci sf tid >>= \case
+                    Nothing   -> respond (WithStatus @204 NoBody)
+                    Just note -> respond (WithStatus @409 (toView note))
 
         deleteHandler :: (NoteStore m, Log m) => NoteId -> ServerT DeleteNote m
         deleteHandler nid (DeleteRequest vc) =

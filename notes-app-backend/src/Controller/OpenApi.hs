@@ -42,7 +42,8 @@ notesOpenApi =
                                 \POST /user creates a user, returning 201 with the new user, 409 if the \
                                 \username is taken, or 422 with BlankUsername or EmptyPassword. \
                                 \POST /login returns a bearer token, or 401 for a wrong username or password; \
-                                \use Authorize to log in here. GET /me needs that token."
+                                \use Authorize to log in here. GET /me and PUT /note need that token, \
+                                \and PUT /note returns 403 if the body's userId isn't the token's user."
 
 newtype OrderedSpec = OrderedSpec Value
 

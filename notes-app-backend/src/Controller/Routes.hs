@@ -58,8 +58,9 @@ type LoadNote =
                         ]
 
 type StoreNote =
-    ReqBody '[JSON] StoreRequest
+    JwtAuth :> ReqBody '[JSON] StoreRequest
         :> UVerb 'PUT '[JSON] '[ WithStatus 204 NoBody
+                               , WithStatus 403 NoBody
                                , WithStatus 409 NoteView
                                ]
 
