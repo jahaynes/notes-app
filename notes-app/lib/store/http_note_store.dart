@@ -50,9 +50,10 @@ class HttpNoteStore extends NoteStore {
       _synced = {for (final n in notes) n.id: n};
 
   /// Loads the topics and notes of the user who logged in with [login]
-  /// from the backend at [baseUri]. Their default topic shares their id, so
-  /// that any device can find it. Requests go through [inner], and
-  /// [onRejected] is called whenever the backend turns down the token.
+  /// from the backend at [baseUri]. The backend creates their default topic
+  /// along with them, so any device finds it by its name. Requests go through
+  /// [inner], and [onRejected] is called whenever the backend turns down the
+  /// token.
   static Future<HttpNoteStore> open(
     http.Client inner,
     Uri baseUri,
@@ -61,40 +62,31 @@ class HttpNoteStore extends NoteStore {
     required void Function() onRejected,
   }) async {
     final client = _BearerClient(inner, login.token, onRejected);
-    final user = User(
-      id: login.userId,
-      defaultTopic: Topic(id: login.userId, name: 'Uncategorised'),
-    );
     var deviceId = prefs.getString(_deviceKey);
     if (deviceId == null) {
       deviceId = const Uuid().v4();
       await prefs.setString(_deviceKey, deviceId);
     }
 
-    final topicViews = await _getTopics(client, baseUri, user.id);
+    final topicViews = await _getTopics(client, baseUri, login.userId);
     final serverTopics = [for (final json in topicViews) _topicFromView(json)];
     final topicClocks = {
       for (final json in topicViews)
         json['topicId'] as String: _clockFrom(json),
     };
-    var defaultTopic = serverTopics
-        .where((t) => t.id == user.defaultTopic.id)
+    final defaultTopic = serverTopics
+        .where((t) => t.name == Topic.defaultName)
         .firstOrNull;
     if (defaultTopic == null) {
-      final stored = await _putTopic(
-        client,
-        baseUri,
-        user.id,
-        deviceId,
-        user.defaultTopic,
+      throw StateError(
+        'user ${login.userId} has no ${Topic.defaultName} topic',
       );
-      defaultTopic = stored.topic;
-      topicClocks[defaultTopic.id] = stored.clock;
     }
+    final user = User(id: login.userId, defaultTopic: defaultTopic);
     final topics = List<Topic>.unmodifiable([
       defaultTopic,
       for (final t in serverTopics)
-        if (t.id != user.defaultTopic.id) t,
+        if (t.id != defaultTopic.id) t,
     ]);
 
     final clocks = <String, Map<String, int>>{};

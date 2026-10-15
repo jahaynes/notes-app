@@ -11,12 +11,20 @@ import 'package:shared_preferences/shared_preferences.dart';
 const _user = 'user-1';
 const _token = 'token-1';
 
+/// The id of the Uncategorised topic the backend created along with [_user].
+const _defaultTopic = 'topic-0';
+
 /// A Notes API that accepts every PUT, holding NoteViews and TopicViews. A
 /// DELETE goes through only if its clock has seen every write to the note or
 /// topic, and a topic DELETE is refused as the real one refuses it. Every
 /// request needs [_token], which belongs to [_user] until it [expired], and
-/// a note PUT must be for that user.
+/// a note PUT must be for that user. [_user] starts with [_defaultTopic], as
+/// the real backend creates it with them.
 class _Backend {
+  _Backend() {
+    topicElsewhere(_defaultTopic, name: 'Uncategorised');
+  }
+
   var expired = false;
 
   /// How many times the store was told its token was turned down.
@@ -43,7 +51,7 @@ class _Backend {
   }
 
   /// Stores a note as if another device had written it.
-  void putElsewhere(String id, {required String title, String topic = _user}) {
+  void putElsewhere(String id, {required String title, String topic = _defaultTopic}) {
     notes[id] = {
       'noteId': id,
       'clock': {'$_user:other': (notes[id]?['clock']?['$_user:other'] ?? 0) + 1},
@@ -256,7 +264,7 @@ void main() {
     };
     backend.putElsewhere('w', title: 'W', topic: 'work');
     await store.refreshTopic(null);
-    expect(store.topics.value.map((t) => t.id), [_user, 'work']);
+    expect(store.topics.value.map((t) => t.id), [_defaultTopic, 'work']);
     expect(store.byId('w')?.title, 'W');
   });
 
@@ -326,10 +334,10 @@ void main() {
     final store = await _open(backend);
     await store.dispatch(const DeleteTopics(['work']));
 
-    expect(store.topics.value.map((t) => t.id), [_user]);
-    expect(store.byId('a')?.topicId, _user);
-    expect(backend.topics.keys, [_user]);
-    expect(backend.notes['a']?['topicId'], _user);
+    expect(store.topics.value.map((t) => t.id), [_defaultTopic]);
+    expect(store.byId('a')?.topicId, _defaultTopic);
+    expect(backend.topics.keys, [_defaultTopic]);
+    expect(backend.notes['a']?['topicId'], _defaultTopic);
     expect(backend.notePuts, isEmpty);
 
     // The next write carries on from the clock the backend ticked.
@@ -353,7 +361,7 @@ void main() {
     );
     await store.dispatch(const DeleteTopics(['work']));
     await edit;
-    expect(backend.notes['a']?['topicId'], _user);
+    expect(backend.notes['a']?['topicId'], _defaultTopic);
     expect(backend.notes['a']?['title'], 'A2');
   });
 
@@ -388,7 +396,7 @@ void main() {
         ),
       ),
     );
-    expect(store.topics.value.map((t) => t.id), [_user, 'work']);
+    expect(store.topics.value.map((t) => t.id), [_defaultTopic, 'work']);
     expect(store.byId('a')?.topicId, 'work');
     expect(backend.topics.keys, contains('work'));
   });

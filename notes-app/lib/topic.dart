@@ -11,6 +11,10 @@ class Topic {
 
   static const _uuid = Uuid();
 
+  /// The name of the topic every user starts with, where notes go when they
+  /// have no other.
+  static const defaultName = 'Uncategorised';
+
   final String id;
   final String name;
 

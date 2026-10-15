@@ -12,7 +12,7 @@ class User {
   /// are generated here, so a backend can be told about the user later
   /// without renaming anything.
   factory User.create() =>
-      User(id: _uuid.v4(), defaultTopic: Topic.create('Uncategorised'));
+      User(id: _uuid.v4(), defaultTopic: Topic.create(Topic.defaultName));
 
   static const _uuid = Uuid();
 
