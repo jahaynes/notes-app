@@ -18,6 +18,9 @@ class Account {
   );
 }
 
+/// Who's logged in, and the bearer token for their requests.
+typedef Login = ({String userId, String token});
+
 /// POST /login turned down the username and password.
 class WrongCredentials implements Exception {
   @override
@@ -41,6 +44,13 @@ class AuthSession {
 
   /// The bearer token for requests, or null when logged out.
   String? get token => _prefs.getString(_tokenKey);
+
+  /// The logged-in user and their token, or null when logged out or the
+  /// saved login couldn't be checked.
+  Login? get login => switch ((_account.value, token)) {
+    (Account(:final id), final String token) => (userId: id, token: token),
+    _ => null,
+  };
 
   /// Picks up a saved login, dropping it if the backend no longer accepts
   /// it, e.g. it has expired or the backend was restarted with a new key.

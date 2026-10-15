@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:noteish/auth.dart';
 import 'package:noteish/main.dart';
+import 'package:noteish/notes_screen.dart';
 import 'package:noteish/store/local_note_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -59,17 +60,23 @@ void main() {
     expect(stale.token, isNull);
   });
 
-  testWidgets('log in and out from the bottom of the sidebar', (tester) async {
+  testWidgets('notes open as whoever logs in, and logging out leaves them', (
+    tester,
+  ) async {
     final auth = await _session({});
-    final store = await LocalNoteStore.open(
-      await SharedPreferences.getInstance(),
+    final prefs = await SharedPreferences.getInstance();
+    final opened = <Login>[];
+    await tester.pumpWidget(
+      LoggedInApp(
+        auth: auth,
+        openStore: (login) {
+          opened.add(login);
+          return LocalNoteStore.open(prefs);
+        },
+      ),
     );
-    await tester.pumpWidget(NoteishApp(store: store, auth: auth));
-    await tester.tap(find.byTooltip('Show sidebar'));
-    await tester.pumpAndSettle();
+    expect(find.byType(NotesScreen), findsNothing);
 
-    await tester.tap(find.widgetWithText(ListTile, 'Log in'));
-    await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).at(0), 'john');
     await tester.enterText(find.byType(TextField).at(1), 'wrong');
     await tester.pump(); // Enables the button.
@@ -80,20 +87,24 @@ void main() {
       findsOneWidget,
     );
     expect(auth.account.value, isNull);
+    expect(opened, isEmpty);
 
     await tester.enterText(find.byType(TextField).at(1), 'something');
     await tester.pump();
     await tester.tap(find.widgetWithText(FilledButton, 'Log in'));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsNothing);
-    expect(find.widgetWithText(ListTile, 'john'), findsOneWidget);
-    expect(auth.token, 'good');
+    expect(opened, [(userId: 'u-1', token: 'good')]);
+    expect(find.byType(NotesScreen), findsOneWidget);
 
+    await tester.tap(find.byTooltip('Show sidebar'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, 'john'), findsOneWidget);
     await tester.tap(find.byTooltip('Log out'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Log out'));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(ListTile, 'Log in'), findsOneWidget);
+    expect(find.byType(NotesScreen), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Log in'), findsOneWidget);
     expect(auth.token, isNull);
   });
 }

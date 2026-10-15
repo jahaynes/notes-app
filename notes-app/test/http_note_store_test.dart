@@ -9,10 +9,12 @@ import 'package:noteish/store/note_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const _user = 'user-1';
+const _token = 'token-1';
 
 /// A Notes API that accepts every PUT, holding NoteViews and TopicViews. A
 /// DELETE goes through only if its clock has seen every write to the note or
-/// topic, and a topic DELETE is refused as the real one refuses it.
+/// topic, and a topic DELETE is refused as the real one refuses it. A note
+/// PUT needs [_token], which belongs to [_user].
 class _Backend {
   final notes = <String, Map<String, dynamic>>{};
   final topics = <String, Map<String, dynamic>>{};
@@ -71,7 +73,11 @@ class _Backend {
         };
         return http.Response('', 204);
       case ('PUT', ['note', final id]):
+        if (request.headers['Authorization'] != 'Bearer $_token') {
+          return http.Response('', 401);
+        }
         final body = jsonDecode(request.body) as Map<String, dynamic>;
+        if (body['userId'] != _user) return http.Response('', 403);
         notePuts.add(body);
         notes[id] = {
           'noteId': id,
@@ -144,7 +150,7 @@ Future<HttpNoteStore> _open(_Backend backend) async {
     backend.client,
     Uri.parse('http://notes.test/'),
     await SharedPreferences.getInstance(),
-    userId: _user,
+    (userId: _user, token: _token),
   );
 }
 

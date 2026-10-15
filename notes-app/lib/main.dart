@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth.dart';
 import 'editor_screen.dart';
+import 'login_screen.dart';
 import 'note.dart';
 import 'notes_screen.dart';
 import 'store/http_note_store.dart';
@@ -15,26 +16,143 @@ import 'store/note_store.dart';
 /// Notes are kept on the device when it isn't set.
 const _notesApi = String.fromEnvironment('NOTES_API');
 
-/// The user to sign in to the Notes API as, e.g.
-/// `--dart-define=NOTES_USER=<uuid>`. The device's own user when not set.
-const _notesUser = String.fromEnvironment('NOTES_USER');
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  final NoteStore store = _notesApi.isEmpty
-      ? await LocalNoteStore.open(prefs)
-      : await HttpNoteStore.open(
-          http.Client(),
-          Uri.parse(_notesApi),
-          prefs,
-          userId: _notesUser.isEmpty ? null : _notesUser,
-        );
-  final auth = _notesApi.isEmpty
+  if (_notesApi.isEmpty) {
+    runApp(NoteishApp(store: await LocalNoteStore.open(prefs)));
+    return;
+  }
+  final client = http.Client();
+  final baseUri = Uri.parse(_notesApi);
+  final auth = AuthSession(client, baseUri, prefs);
+  await auth.restore();
+  runApp(
+    LoggedInApp(
+      auth: auth,
+      openStore: (login) => HttpNoteStore.open(client, baseUri, prefs, login),
+    ),
+  );
+}
+
+ThemeData _theme(Brightness brightness) => ThemeData(
+  colorSchemeSeed: const Color(0xFFF2B33D),
+  brightness: brightness,
+  useMaterial3: true,
+);
+
+MaterialApp _plainApp(Widget home) => MaterialApp(
+  title: 'Noteish',
+  debugShowCheckedModeBanner: false,
+  theme: _theme(Brightness.light),
+  darkTheme: _theme(Brightness.dark),
+  home: home,
+);
+
+/// The app against the Notes API: a login screen until someone is logged
+/// in, then their notes from the store [openStore] opens for them. Logging
+/// out goes back to the login screen.
+class LoggedInApp extends StatefulWidget {
+  const LoggedInApp({super.key, required this.auth, required this.openStore});
+
+  final AuthSession auth;
+  final Future<NoteStore> Function(Login login) openStore;
+
+  @override
+  State<LoggedInApp> createState() => _LoggedInAppState();
+}
+
+class _LoggedInAppState extends State<LoggedInApp> {
+  /// The logged-in user's store, or null when logged out.
+  ({String userId, Future<NoteStore> store})? _opened;
+
+  @override
+  void initState() {
+    super.initState();
+    _opened = _open(widget.auth.login);
+    widget.auth.account.addListener(_loginChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.auth.account.removeListener(_loginChanged);
+    super.dispose();
+  }
+
+  ({String userId, Future<NoteStore> store})? _open(Login? login) =>
+      login == null
       ? null
-      : AuthSession(http.Client(), Uri.parse(_notesApi), prefs);
-  await auth?.restore();
-  runApp(NoteishApp(store: store, auth: auth));
+      : (userId: login.userId, store: widget.openStore(login));
+
+  void _loginChanged() {
+    final login = widget.auth.login;
+    if (login?.userId == _opened?.userId) return;
+    // Changes held back still go out, as the user who made them.
+    _opened?.store.then((store) => store.flush()).ignore();
+    setState(() => _opened = _open(login));
+  }
+
+  @override
+  Widget build(BuildContext context) => switch (_opened) {
+    null => _plainApp(LoginScreen(auth: widget.auth)),
+    (:final userId, :final store) => FutureBuilder(
+      key: ValueKey(userId),
+      future: store,
+      builder: (context, snapshot) => switch (snapshot) {
+        AsyncSnapshot(:final data?) => NoteishApp(
+          store: data,
+          auth: widget.auth,
+        ),
+        AsyncSnapshot(:final error?) => _plainApp(
+          _OpenFailed(
+            error: error,
+            onRetry: () => setState(() => _opened = _open(widget.auth.login)),
+            onLogOut: widget.auth.logOut,
+          ),
+        ),
+        _ => _plainApp(
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
+        ),
+      },
+    ),
+  };
+}
+
+/// Says the logged-in user's notes couldn't be loaded.
+class _OpenFailed extends StatelessWidget {
+  const _OpenFailed({
+    required this.error,
+    required this.onRetry,
+    required this.onLogOut,
+  });
+
+  final Object error;
+  final VoidCallback onRetry;
+  final VoidCallback onLogOut;
+
+  @override
+  Widget build(BuildContext context) {
+    debugPrint('Could not load notes: $error');
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text("Couldn't load your notes"),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextButton(onPressed: onLogOut, child: const Text('Log out')),
+                const SizedBox(width: 8),
+                FilledButton(onPressed: onRetry, child: const Text('Retry')),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class NoteishApp extends StatefulWidget {
@@ -42,7 +160,8 @@ class NoteishApp extends StatefulWidget {
 
   final NoteStore store;
 
-  /// Logging in to the Notes API, or null when notes are kept on the device.
+  /// Who's logged in to the Notes API, shown in the sidebar with a way to
+  /// log out, or null when notes are kept on the device.
   final AuthSession? auth;
 
   @override
@@ -111,18 +230,11 @@ class _NoteishAppState extends State<NoteishApp> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    const seed = Color(0xFFF2B33D);
-    return MaterialApp.router(
-      title: 'Noteish',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: seed, useMaterial3: true),
-      darkTheme: ThemeData(
-        colorSchemeSeed: seed,
-        brightness: Brightness.dark,
-        useMaterial3: true,
-      ),
-      routerConfig: _router,
-    );
-  }
+  Widget build(BuildContext context) => MaterialApp.router(
+    title: 'Noteish',
+    debugShowCheckedModeBanner: false,
+    theme: _theme(Brightness.light),
+    darkTheme: _theme(Brightness.dark),
+    routerConfig: _router,
+  );
 }

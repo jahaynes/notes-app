@@ -6,10 +6,10 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+import '../auth.dart';
 import '../note.dart';
 import '../topic.dart';
 import '../user.dart';
-import 'local_note_store.dart';
 import 'note_store.dart';
 
 /// A request to the backend that came back with a status we don't handle.
@@ -29,8 +29,9 @@ class NotesApiException implements Exception {
 /// is sent to the backend once it's gone [_writeDelay] without changing
 /// again, and requests go one at a time, in the order they were sent.
 ///
-/// This device's id lives in SharedPreferences, as does the user unless
-/// one is passed to [open].
+/// This device's id lives in SharedPreferences. The user is whoever logged
+/// in with the [Login] the store was opened with: their id goes in request
+/// bodies, and note writes carry their token.
 ///
 /// Deleting a topic is sent straight away rather than held back, and the
 /// backend moves the topic's notes itself.
@@ -44,26 +45,24 @@ class HttpNoteStore extends NoteStore {
     List<Note> notes,
     this._clocks,
     this._topicClocks,
+    this._login,
   ) : _topics = ValueNotifier(topics),
       _notes = ValueNotifier(notes),
       _synced = {for (final n in notes) n.id: n};
 
-  /// Loads the user's topics and notes from the backend at [baseUri].
-  ///
-  /// The user is [userId] if given, whose default topic shares their id so
-  /// that any device can find it. Otherwise it's the user saved in [prefs].
+  /// Loads the topics and notes of the user who logged in with [login]
+  /// from the backend at [baseUri]. Their default topic shares their id, so
+  /// that any device can find it.
   static Future<HttpNoteStore> open(
     http.Client client,
     Uri baseUri,
-    SharedPreferences prefs, {
-    String? userId,
-  }) async {
-    final user = userId == null
-        ? await LocalNoteStore.loadUser(prefs)
-        : User(
-            id: userId,
-            defaultTopic: Topic(id: userId, name: 'Uncategorised'),
-          );
+    SharedPreferences prefs,
+    Login login,
+  ) async {
+    final user = User(
+      id: login.userId,
+      defaultTopic: Topic(id: login.userId, name: 'Uncategorised'),
+    );
     var deviceId = prefs.getString(_deviceKey);
     if (deviceId == null) {
       deviceId = const Uuid().v4();
@@ -113,6 +112,7 @@ class HttpNoteStore extends NoteStore {
       _sorted(notes),
       clocks,
       topicClocks,
+      login,
     );
   }
 
@@ -125,6 +125,7 @@ class HttpNoteStore extends NoteStore {
   final http.Client _client;
   final Uri _baseUri;
   final String _deviceId;
+  final Login _login;
 
   @override
   final User user;
@@ -477,7 +478,10 @@ class HttpNoteStore extends NoteStore {
     final path = 'note/${note.id}';
     final response = await _client.put(
       _baseUri.resolve(path),
-      headers: const {'Content-Type': 'application/json'},
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ${_login.token}',
+      },
       body: jsonEncode({
         'userId': user.id,
         'deviceId': _deviceId,
