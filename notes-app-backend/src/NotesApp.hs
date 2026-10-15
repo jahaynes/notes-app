@@ -35,7 +35,7 @@ addTopic :: NoteStore m
          => UserId -> TopicId -> m ()
 addTopic = addTopicForUser
 
-store :: (NoteStore m, Clock m)
+store :: (NoteStore m, Log m, Clock m)
       => UserId -> DeviceId -> NoteId -> Maybe VectorClock
       -> Title -> Content -> ColorIndex -> Bool -> TopicId
       -> m (Maybe Note)
@@ -48,26 +48,28 @@ store userId deviceId noteId mVc title content colorIndex showFull topicId = do
 
     storeNote userId (Note noteId vectorClock title content colorIndex showFull topicId updatedAt) >>= \case
 
-        Clean ->
+        Clean -> do
+            lPutStrLn "Note created"
             pure Nothing
 
         Conflicted ->
             loadNote noteId
 
-delete :: NoteStore m
+delete :: (NoteStore m, Log m)
        => NoteId -> VectorClock -> m (Maybe Note)
 delete noteId vectorClock =
 
     deleteNote noteId vectorClock >>= \case
 
-        Clean ->
+        Clean -> do
+            lPutStrLn "Note deleted"
             pure Nothing
 
         Conflicted ->
             loadNote noteId
 
 
-storeTopicFor :: (NoteStore m, Clock m)
+storeTopicFor :: (NoteStore m, Log m, Clock m)
               => UserId -> DeviceId -> TopicId -> Maybe VectorClock
               -> TopicName -> Maybe TopicDescription
               -> m (Maybe Topic)
@@ -80,13 +82,14 @@ storeTopicFor userId deviceId topicId mVc name mDescription = do
 
     storeTopic userId (Topic topicId vectorClock name mDescription updatedAt) >>= \case
 
-        Clean ->
+        Clean -> do
+            lPutStrLn "Topic created"
             pure Nothing
 
         Conflicted ->
             loadTopic topicId
 
-deleteTopicFor :: (NoteStore m, Clock m)
+deleteTopicFor :: (NoteStore m, Log m, Clock m)
                => UserId -> DeviceId -> TopicId -> VectorClock -> TopicId
                -> m (TopicDeletion Topic)
 deleteTopicFor userId deviceId topicId vectorClock destination = do
@@ -95,7 +98,8 @@ deleteTopicFor userId deviceId topicId vectorClock destination = do
 
     deleteTopic (UserDevice userId deviceId) updatedAt topicId vectorClock destination >>= \case
 
-        TopicDeleted ->
+        TopicDeleted -> do
+            lPutStrLn "Topic deleted"
             pure TopicDeleted
 
         TopicConflicted () ->
@@ -104,7 +108,7 @@ deleteTopicFor userId deviceId topicId vectorClock destination = do
         TopicRefused refusal ->
             pure (TopicRefused refusal)
 
-register :: (UserStore m, Fresh m, Clock m)
+register :: (UserStore m, Fresh m, Log m, Clock m)
          => Username -> Password
          -> m (UserCreation User)
 register (Username name) password@(Password plain)
@@ -123,7 +127,13 @@ register (Username name) password@(Password plain)
 
         let user = User userId (Username trimmed) (hashPassword salt password) createdAt
 
-        (user <$) <$> createUser user
+        creation <- createUser user
+
+        case creation of
+            UserCreated () -> lPutStrLn "User created"
+            _              -> pure ()
+
+        pure (user <$ creation)
 
     where
     trimmed = T.strip name
