@@ -377,8 +377,8 @@ class _Sidebar extends StatelessWidget {
   final NoteStore store;
   final bool open;
 
-  /// Who's logged in, shown at the bottom with a way to log out, unless
-  /// null.
+  /// Who's logged in, or that the notes are on this device, shown at the
+  /// bottom with a way back to the login screen, unless null.
   final AuthSession? auth;
 
   /// The selected topic's id, or null when "(All)" is selected.
@@ -532,7 +532,8 @@ class _Sidebar extends StatelessWidget {
   }
 }
 
-/// The logged-in user with a way to log out.
+/// The logged-in user with a way to log out, or that the notes are on this
+/// device with a way to log in to a backend instead.
 class _UserSection extends StatelessWidget {
   const _UserSection({required this.auth});
 
@@ -559,27 +560,38 @@ class _UserSection extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder(
-    valueListenable: auth.account,
-    // Nobody only for a moment while logging out, before this screen goes.
-    builder: (context, account, _) => account == null
-        ? const SizedBox.shrink()
-        : ListTile(
-            leading: CircleAvatar(
-              radius: 14,
-              child: Text(account.username.characters.first.toUpperCase()),
-            ),
-            title: Text(
-              account.username,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: IconButton(
-              icon: const Icon(Icons.logout),
-              tooltip: 'Log out',
-              onPressed: () => _logOut(context),
-            ),
-          ),
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: auth.changes,
+    builder: (context, _) => switch ((auth.storage, auth.account.value)) {
+      (OnDevice(), _) => ListTile(
+        leading: const Icon(Icons.smartphone),
+        title: const Text('On this device'),
+        trailing: IconButton(
+          icon: const Icon(Icons.login),
+          tooltip: 'Log in to a server',
+          onPressed: auth.logOut,
+        ),
+      ),
+      (OnServer(), final account?) => ListTile(
+        leading: CircleAvatar(
+          radius: 14,
+          child: Text(account.username.characters.first.toUpperCase()),
+        ),
+        title: Text(
+          account.username,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: IconButton(
+          icon: const Icon(Icons.logout),
+          tooltip: 'Log out',
+          onPressed: () => _logOut(context),
+        ),
+      ),
+      // Nowhere only for a moment while logging out, before this screen
+      // goes.
+      _ => const SizedBox.shrink(),
+    },
   );
 }
 

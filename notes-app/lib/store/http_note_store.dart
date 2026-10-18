@@ -50,17 +50,17 @@ class HttpNoteStore extends NoteStore {
       _synced = {for (final n in notes) n.id: n};
 
   /// Loads the topics and notes of the user who logged in with [login]
-  /// from the backend at [baseUri]. The backend creates their default topic
+  /// from the backend they logged in to. The backend creates their default topic
   /// along with them, so any device finds it by its name. Requests go through
   /// [inner], and [onRejected] is called whenever the backend turns down the
   /// token.
   static Future<HttpNoteStore> open(
     http.Client inner,
-    Uri baseUri,
     SharedPreferences prefs,
     Login login, {
     required void Function() onRejected,
   }) async {
+    final baseUri = login.server;
     final client = _BearerClient(inner, login.token, onRejected);
     var deviceId = prefs.getString(_deviceKey);
     if (deviceId == null) {
@@ -196,8 +196,7 @@ class HttpNoteStore extends NoteStore {
           _topicClocks[topic.id] = stored.clock;
           if (stored.topic == topic) return;
           _topics.value = List.unmodifiable([
-            for (final t in _topics.value)
-              t.id == topic.id ? stored.topic : t,
+            for (final t in _topics.value) t.id == topic.id ? stored.topic : t,
           ]);
         });
       case DeleteTopics(:final ids):
@@ -218,7 +217,11 @@ class HttpNoteStore extends NoteStore {
         _notes.value = _sorted([
           for (final n in _notes.value)
             if (idSet.contains(n.topicId))
-              _moveNote(n, defaultTopic.id, moved.putIfAbsent(n.topicId, () => {}))
+              _moveNote(
+                n,
+                defaultTopic.id,
+                moved.putIfAbsent(n.topicId, () => {}),
+              )
             else
               n,
         ]);
@@ -324,15 +327,18 @@ class HttpNoteStore extends NoteStore {
     final response = await _client.get(_baseUri.resolve(path));
     switch (response.statusCode) {
       case 200:
-        _merge(
-          (n) => n.id == id,
-          [jsonDecode(response.body) as Map<String, dynamic>],
-        );
+        _merge((n) => n.id == id, [
+          jsonDecode(response.body) as Map<String, dynamic>,
+        ]);
       // Never written, so there's only the copy here.
       case 404:
         return;
       default:
-        throw NotesApiException('GET $path', response.statusCode, response.body);
+        throw NotesApiException(
+          'GET $path',
+          response.statusCode,
+          response.body,
+        );
     }
   });
 
@@ -576,8 +582,8 @@ class HttpNoteStore extends NoteStore {
     Uri baseUri,
     String userId,
   ) async => [
-    for (final view in await _get(client, baseUri, 'user/$userId/topics')
-        as List)
+    for (final view
+        in await _get(client, baseUri, 'user/$userId/topics') as List)
       view as Map<String, dynamic>,
   ]..sort((a, b) => _updatedAt(a).compareTo(_updatedAt(b)));
 
@@ -587,8 +593,8 @@ class HttpNoteStore extends NoteStore {
     Uri baseUri,
     String topicId,
   ) async => [
-    for (final view in await _get(client, baseUri, 'topic/$topicId/notes')
-        as List)
+    for (final view
+        in await _get(client, baseUri, 'topic/$topicId/notes') as List)
       view as Map<String, dynamic>,
   ];
 

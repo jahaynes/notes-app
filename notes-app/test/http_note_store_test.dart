@@ -51,10 +51,16 @@ class _Backend {
   }
 
   /// Stores a note as if another device had written it.
-  void putElsewhere(String id, {required String title, String topic = _defaultTopic}) {
+  void putElsewhere(
+    String id, {
+    required String title,
+    String topic = _defaultTopic,
+  }) {
     notes[id] = {
       'noteId': id,
-      'clock': {'$_user:other': (notes[id]?['clock']?['$_user:other'] ?? 0) + 1},
+      'clock': {
+        '$_user:other': (notes[id]?['clock']?['$_user:other'] ?? 0) + 1,
+      },
       'title': title,
       'content': '',
       'colorIndex': 0,
@@ -146,10 +152,9 @@ class _Backend {
   });
 
   /// Whether [clock] has seen every write in the [stored] view's clock.
-  static bool _hasSeen(Map clock, Map stored) =>
-      (stored['clock'] as Map).entries.every(
-        (e) => ((clock[e.key] ?? -1) as int) >= (e.value as int),
-      );
+  static bool _hasSeen(Map clock, Map stored) => (stored['clock'] as Map)
+      .entries
+      .every((e) => ((clock[e.key] ?? -1) as int) >= (e.value as int));
 
   static http.Response _json(Object body, {int status = 200}) => http.Response(
     jsonEncode(body),
@@ -162,9 +167,8 @@ Future<HttpNoteStore> _open(_Backend backend) async {
   SharedPreferences.setMockInitialValues({});
   return HttpNoteStore.open(
     backend.client,
-    Uri.parse('http://notes.test/'),
     await SharedPreferences.getInstance(),
-    (userId: _user, token: _token),
+    (server: Uri.parse('http://notes.test/'), userId: _user, token: _token),
     onRejected: () => backend.rejections++,
   );
 }
@@ -208,9 +212,8 @@ void main() {
   test('flush writes held-back edits straight away', () async {
     final backend = _Backend();
     final store = await _open(backend);
-    final note = Note.create(
-      topicId: store.defaultTopic.id,
-    ).copyWith(title: 'A');
+    final note = Note.create(topicId: store.defaultTopic.id)
+        .copyWith(title: 'A');
     store.dispatch(SaveNote(note));
     await store.flush();
     expect(backend.notes[note.id]?['title'], 'A');
@@ -268,24 +271,27 @@ void main() {
     expect(store.byId('w')?.title, 'W');
   });
 
-  test('refreshing a note fetches it, but deleted notes stay deleted', () async {
-    final backend = _Backend();
-    backend
-      ..putElsewhere('a', title: 'old')
-      ..putElsewhere('b', title: 'B');
-    final store = await _open(backend);
-    backend.putElsewhere('a', title: 'new');
-    await store.refreshNote('a');
-    expect(store.byId('a')?.title, 'new');
+  test(
+    'refreshing a note fetches it, but deleted notes stay deleted',
+    () async {
+      final backend = _Backend();
+      backend
+        ..putElsewhere('a', title: 'old')
+        ..putElsewhere('b', title: 'B');
+      final store = await _open(backend);
+      backend.putElsewhere('a', title: 'new');
+      await store.refreshNote('a');
+      expect(store.byId('a')?.title, 'new');
 
-    store.dispatch(const DeleteNotes(['b']));
-    await store.refreshTopic(store.defaultTopic.id);
-    expect(store.byId('b'), isNull, reason: 'waiting to be deleted');
+      store.dispatch(const DeleteNotes(['b']));
+      await store.refreshTopic(store.defaultTopic.id);
+      expect(store.byId('b'), isNull, reason: 'waiting to be deleted');
 
-    await store.refreshNote('never written');
-    expect(store.byId('never written'), isNull);
-    await store.flush();
-  });
+      await store.refreshNote('never written');
+      expect(store.byId('never written'), isNull);
+      await store.flush();
+    },
+  );
 
   test('deleting a note deletes it from the backend', () async {
     final backend = _Backend()..putElsewhere('a', title: 'A');

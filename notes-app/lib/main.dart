@@ -12,32 +12,25 @@ import 'store/http_note_store.dart';
 import 'store/local_note_store.dart';
 import 'store/note_store.dart';
 
-/// The Notes API base URL, e.g. `--dart-define=NOTES_API=http://127.0.0.1:8081/`.
-/// Notes are kept on the device when it isn't set.
-const _notesApi = String.fromEnvironment('NOTES_API');
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  if (_notesApi.isEmpty) {
-    runApp(NoteishApp(store: await LocalNoteStore.open(prefs)));
-    return;
-  }
   final client = http.Client();
-  final baseUri = Uri.parse(_notesApi);
-  final auth = AuthSession(client, baseUri, prefs);
+  final auth = AuthSession(client, prefs);
   await auth.restore();
   runApp(
     LoggedInApp(
       auth: auth,
-      // A turned-down token logs out, which goes back to the login screen.
-      openStore: (login) => HttpNoteStore.open(
-        client,
-        baseUri,
-        prefs,
-        login,
-        onRejected: () => auth.rejected(login.token),
-      ),
+      openStore: (storage) => switch (storage) {
+        OnDevice() => LocalNoteStore.open(prefs),
+        // A turned-down token logs out, which goes back to the login screen.
+        OnServer(:final login) => HttpNoteStore.open(
+          client,
+          prefs,
+          login,
+          onRejected: () => auth.rejected(login.token),
+        ),
+      },
     ),
   );
 }
@@ -56,54 +49,54 @@ MaterialApp _plainApp(Widget home) => MaterialApp(
   home: home,
 );
 
-/// The app against the Notes API: a login screen until someone is logged
-/// in, then their notes from the store [openStore] opens for them. Logging
-/// out goes back to the login screen.
+/// The app: a login screen until someone is logged in to a backend or picks
+/// this device, then the notes from the store [openStore] opens for that.
+/// Logging out goes back to the login screen.
 class LoggedInApp extends StatefulWidget {
   const LoggedInApp({super.key, required this.auth, required this.openStore});
 
   final AuthSession auth;
-  final Future<NoteStore> Function(Login login) openStore;
+  final Future<NoteStore> Function(Storage storage) openStore;
 
   @override
   State<LoggedInApp> createState() => _LoggedInAppState();
 }
 
 class _LoggedInAppState extends State<LoggedInApp> {
-  /// The logged-in user's store, or null when logged out.
-  ({String userId, Future<NoteStore> store})? _opened;
+  /// The store for where the notes are kept, or null until that's picked.
+  ({Object id, Future<NoteStore> store})? _opened;
 
   @override
   void initState() {
     super.initState();
-    _opened = _open(widget.auth.login);
-    widget.auth.account.addListener(_loginChanged);
+    _opened = _open(widget.auth.storage);
+    widget.auth.changes.addListener(_storageChanged);
   }
 
   @override
   void dispose() {
-    widget.auth.account.removeListener(_loginChanged);
+    widget.auth.changes.removeListener(_storageChanged);
     super.dispose();
   }
 
-  ({String userId, Future<NoteStore> store})? _open(Login? login) =>
-      login == null
+  ({Object id, Future<NoteStore> store})? _open(Storage? storage) =>
+      storage == null
       ? null
-      : (userId: login.userId, store: widget.openStore(login));
+      : (id: storage.id, store: widget.openStore(storage));
 
-  void _loginChanged() {
-    final login = widget.auth.login;
-    if (login?.userId == _opened?.userId) return;
+  void _storageChanged() {
+    final storage = widget.auth.storage;
+    if (storage?.id == _opened?.id) return;
     // Changes held back still go out, as the user who made them.
     _opened?.store.then((store) => store.flush()).ignore();
-    setState(() => _opened = _open(login));
+    setState(() => _opened = _open(storage));
   }
 
   @override
   Widget build(BuildContext context) => switch (_opened) {
     null => _plainApp(LoginScreen(auth: widget.auth)),
-    (:final userId, :final store) => FutureBuilder(
-      key: ValueKey(userId),
+    (:final id, :final store) => FutureBuilder(
+      key: ValueKey(id),
       future: store,
       builder: (context, snapshot) => switch (snapshot) {
         AsyncSnapshot(:final data?) => NoteishApp(
@@ -113,7 +106,7 @@ class _LoggedInAppState extends State<LoggedInApp> {
         AsyncSnapshot(:final error?) => _plainApp(
           _OpenFailed(
             error: error,
-            onRetry: () => setState(() => _opened = _open(widget.auth.login)),
+            onRetry: () => setState(() => _opened = _open(widget.auth.storage)),
             onLogOut: widget.auth.logOut,
           ),
         ),
@@ -167,8 +160,9 @@ class NoteishApp extends StatefulWidget {
 
   final NoteStore store;
 
-  /// Who's logged in to the Notes API, shown in the sidebar with a way to
-  /// log out, or null when notes are kept on the device.
+  /// Who's logged in to the Notes API, or that the notes are on this device,
+  /// shown in the sidebar with a way back to the login screen. Null shows
+  /// neither.
   final AuthSession? auth;
 
   @override
