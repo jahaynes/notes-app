@@ -33,17 +33,15 @@ class _EditorScreenState extends State<EditorScreen> {
     super.dispose();
   }
 
-  void _save({int? colorIndex, bool? showFull, String? topicId}) {
+  void _save({String? topicId}) {
     final next = _note.copyWith(
       title: _title.text,
       body: _body.text,
-      colorIndex: colorIndex,
-      showFull: showFull,
       topicId: topicId,
     );
     if (next == _note) return;
     final contentChanged = next.title != _note.title || next.body != _note.body;
-    // Only bump the timestamp for content edits, not display tweaks.
+    // Only bump the timestamp for content edits, not moves.
     setState(
       () => _note = contentChanged
           ? next.copyWith(updatedAt: DateTime.now())
@@ -87,33 +85,6 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  void _pickColor() {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-          child: Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              for (var i = 0; i < noteColors.length; i++)
-                _ColorDot(
-                  color: noteColors[i],
-                  selected: _note.colorIndex == i,
-                  onTap: () {
-                    _save(colorIndex: i);
-                    Navigator.pop(sheetContext);
-                  },
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -126,35 +97,10 @@ class _EditorScreenState extends State<EditorScreen> {
         backgroundColor: bg,
         foregroundColor: bg != null ? Colors.black87 : null,
         actions: [
-          InkWell(
-            borderRadius: BorderRadius.circular(20),
-            onTap: () => _save(showFull: !_note.showFull),
-            child: Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Row(
-                children: [
-                  Checkbox(
-                    value: _note.showFull,
-                    onChanged: (v) => _save(showFull: v),
-                    side: BorderSide(color: fg, width: 2),
-                  ),
-                  Text(
-                    'Show in full',
-                    style: theme.textTheme.labelLarge?.copyWith(color: fg),
-                  ),
-                ],
-              ),
-            ),
-          ),
           IconButton(
             tooltip: 'Topic',
             icon: const Icon(Icons.label_outline),
             onPressed: _pickTopic,
-          ),
-          IconButton(
-            tooltip: 'Color',
-            icon: const Icon(Icons.palette_outlined),
-            onPressed: _pickColor,
           ),
           IconButton(
             tooltip: 'Delete',
@@ -199,42 +145,6 @@ class _EditorScreenState extends State<EditorScreen> {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _ColorDot extends StatelessWidget {
-  const _ColorDot({
-    required this.color,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final Color? color;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return InkResponse(
-      onTap: onTap,
-      radius: 26,
-      child: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: color ?? scheme.surface,
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: selected ? scheme.primary : scheme.outlineVariant,
-            width: selected ? 3 : 1,
-          ),
-        ),
-        child: color == null
-            ? Icon(Icons.format_color_reset, size: 20, color: scheme.onSurface)
-            : null,
       ),
     );
   }

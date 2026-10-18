@@ -77,6 +77,15 @@ class LocalNoteStore extends NoteStore {
             if (idSet.contains(n.id) && n.topicId != topicId)
               n.copyWith(topicId: topicId),
         ]);
+      case StyleNotes(:final ids, :final colorIndex, :final showFull):
+        final idSet = ids.toSet();
+        await _saveNotes([
+          for (final n in _notes.value)
+            if (idSet.contains(n.id))
+              if (n.copyWith(colorIndex: colorIndex, showFull: showFull)
+                  case final styled when styled != n)
+                styled,
+        ]);
       case UndoDelete():
         await _saveNotes(_lastDeleted.value);
       case AddTopic(:final topic):

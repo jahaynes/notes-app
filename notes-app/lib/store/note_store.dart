@@ -34,6 +34,17 @@ final class MoveNotes extends NoteAction {
   final String topicId;
 }
 
+/// Gives the notes with [ids] the color [colorIndex] and sets whether they're
+/// shown in full to [showFull], leaving alone whichever is null, and their
+/// timestamps too.
+final class StyleNotes extends NoteAction {
+  const StyleNotes(this.ids, {this.colorIndex, this.showFull});
+
+  final Iterable<String> ids;
+  final int? colorIndex;
+  final bool? showFull;
+}
+
 /// Restores every note in [NoteStore.lastDeleted].
 final class UndoDelete extends NoteAction {
   const UndoDelete();

@@ -343,7 +343,10 @@ void main() {
     await tester.longPress(find.text('One'));
     await tester.pumpAndSettle();
     expect(find.text('1 selected'), findsOneWidget);
-    expect(find.byType(Checkbox), findsNWidgets(3));
+    expect(
+      find.descendant(of: find.byType(Card), matching: find.byType(Checkbox)),
+      findsNWidgets(3),
+    );
     expect(find.text('New note'), findsNothing);
 
     // In selection mode a tap ticks rather than opening the note.
@@ -539,12 +542,11 @@ void main() {
 
     expect(tester.widget<Text>(find.text(body)).maxLines, 8);
 
-    await tester.tap(find.text(body));
+    expect(find.text('Show in full'), findsNothing);
+    await tester.longPress(find.text(body));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Show in full'));
     await tester.pump();
-    await tester.pageBack();
-    await tester.pumpAndSettle();
 
     expect(store.notes.value.single.showFull, isTrue);
     expect(tester.widget<Text>(find.text(body)).maxLines, isNull);
@@ -553,6 +555,42 @@ void main() {
       await SharedPreferences.getInstance(),
     );
     expect(reloaded.notes.value.single.showFull, isTrue);
+  });
+
+  testWidgets('color applies to every ticked note and not the others', (
+    tester,
+  ) async {
+    final store = await _freshStore();
+    for (final title in ['One', 'Two', 'Three']) {
+      await store.dispatch(
+        SaveNote(
+          Note.create(topicId: store.defaultTopic.id).copyWith(title: title),
+        ),
+      );
+    }
+    await tester.pumpWidget(NoteishApp(store: store));
+    expect(find.byTooltip('Color'), findsNothing);
+
+    await tester.longPress(find.text('One'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Two'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Color'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find
+          .descendant(
+            of: find.byType(BottomSheet),
+            matching: find.byType(InkResponse),
+          )
+          .at(2),
+    );
+    await tester.pumpAndSettle();
+
+    Note titled(String t) => store.notes.value.firstWhere((n) => n.title == t);
+    expect(titled('One').colorIndex, 2);
+    expect(titled('Two').colorIndex, 2);
+    expect(titled('Three').colorIndex, 0);
   });
 
   testWidgets('edits survive leaving via a URL change (browser back)', (

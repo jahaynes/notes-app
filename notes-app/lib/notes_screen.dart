@@ -96,6 +96,44 @@ class _NotesScreenState extends State<NotesScreen> {
     }
   }
 
+  List<Note> get _tickedNotes => [
+    for (final n in store.notes.value)
+      if (_selectedNotes.contains(n.id)) n,
+  ];
+
+  void _styleSelected({int? colorIndex, bool? showFull}) => store.dispatch(
+    StyleNotes(_selectedNotes, colorIndex: colorIndex, showFull: showFull),
+  );
+
+  void _pickColor() {
+    // Mark a color only when every ticked note has it.
+    final colors = {for (final n in _tickedNotes) n.colorIndex};
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              for (var i = 0; i < noteColors.length; i++)
+                _ColorDot(
+                  color: noteColors[i],
+                  selected: colors.length == 1 && colors.single == i,
+                  onTap: () {
+                    _styleSelected(colorIndex: i);
+                    Navigator.pop(sheetContext);
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// The selected topic, or null when showing all notes.
   Topic? get _selectedTopic => _topicId == null
       ? null
@@ -224,6 +262,47 @@ class _NotesScreenState extends State<NotesScreen> {
                 '${_selectedTopics.length == 1 ? 'topic' : 'topics'} selected',
     ),
     actions: [
+      if (_selectedNotes.isNotEmpty) ...[
+        ListenableBuilder(
+          listenable: store.notes,
+          builder: (context, _) {
+            final ticked = _tickedNotes;
+            // Ticked when every ticked note is shown in full, unticked when
+            // none are, and dashed when it's a mix.
+            final showFull = ticked.every((n) => n.showFull)
+                ? true
+                : ticked.any((n) => n.showFull)
+                ? null
+                : false;
+            return InkWell(
+              borderRadius: BorderRadius.circular(20),
+              onTap: () => _styleSelected(showFull: showFull != true),
+              child: Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Row(
+                  children: [
+                    Checkbox(
+                      value: showFull,
+                      tristate: true,
+                      onChanged: (_) =>
+                          _styleSelected(showFull: showFull != true),
+                    ),
+                    Text(
+                      'Show in full',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+        IconButton(
+          tooltip: 'Color',
+          icon: const Icon(Icons.palette_outlined),
+          onPressed: _pickColor,
+        ),
+      ],
       IconButton(
         icon: const Icon(Icons.delete_outline),
         tooltip: _selectedNotes.isNotEmpty
@@ -818,6 +897,42 @@ class _NoteCard extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ColorDot extends StatelessWidget {
+  const _ColorDot({
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final Color? color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkResponse(
+      onTap: onTap,
+      radius: 26,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: color ?? scheme.surface,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: selected ? scheme.primary : scheme.outlineVariant,
+            width: selected ? 3 : 1,
+          ),
+        ),
+        child: color == null
+            ? Icon(Icons.format_color_reset, size: 20, color: scheme.onSurface)
+            : null,
       ),
     );
   }
