@@ -366,6 +366,9 @@ class _NotesScreenState extends State<NotesScreen> {
   );
 
   Widget _body() => Row(
+    // Fill the height, so the notes start at the top and the whole area
+    // below them takes taps.
+    crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       _Sidebar(
         store: store,
@@ -386,55 +389,59 @@ class _NotesScreenState extends State<NotesScreen> {
         },
       ),
       Expanded(
-        child: ListenableBuilder(
-          listenable: store.notes,
-          builder: (context, _) {
-            final notes = store.search(
-              _searchController.text,
-              topicId: _topicId,
-            );
-            if (notes.isEmpty) {
-              return _EmptyState(searching: _searchController.text.isNotEmpty);
-            }
-            return LayoutBuilder(
-              builder: (context, constraints) {
-                // Aim for 240-wide cards, but fit two side by side on a phone
-                // as long as each gets at least 150.
-                final width = constraints.maxWidth;
-                final columns = width < 2 * 150
-                    ? 1
-                    : (width / 240).floor().clamp(2, 5);
-                return SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
-                  child: _Masonry(
-                    columns: columns,
-                    children: [
-                      for (final note in notes)
-                        _DraggableNote(
-                          key: ValueKey(note.id),
-                          // Dragging carries the ticked notes along with this one.
-                          ids: {..._selectedNotes, note.id},
-                          onDragStarted: () => _startDrag(note),
-                          onDragEnd: _endDrag,
-                          child: _NoteCard(
-                            note: note,
-                            selected: _selectedNotes.isNotEmpty
-                                ? _selectedNotes.contains(note.id)
-                                : null,
-                            onTap: _selectedNotes.isNotEmpty
-                                ? () => _toggleNote(note)
-                                : () => _openNote(note),
-                          ),
-                        ),
-                    ],
-                  ),
-                );
-              },
-            );
-          },
+        // A tap that no note claims, between or below the cards, unticks them.
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _selectedNotes.isNotEmpty ? _clearSelection : null,
+          child: _notes(),
         ),
       ),
     ],
+  );
+
+  Widget _notes() => ListenableBuilder(
+    listenable: store.notes,
+    builder: (context, _) {
+      final notes = store.search(_searchController.text, topicId: _topicId);
+      if (notes.isEmpty) {
+        return _EmptyState(searching: _searchController.text.isNotEmpty);
+      }
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          // Aim for 240-wide cards, but fit two side by side on a phone
+          // as long as each gets at least 150.
+          final width = constraints.maxWidth;
+          final columns = width < 2 * 150
+              ? 1
+              : (width / 240).floor().clamp(2, 5);
+          return SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
+            child: _Masonry(
+              columns: columns,
+              children: [
+                for (final note in notes)
+                  _DraggableNote(
+                    key: ValueKey(note.id),
+                    // Dragging carries the ticked notes along with this one.
+                    ids: {..._selectedNotes, note.id},
+                    onDragStarted: () => _startDrag(note),
+                    onDragEnd: _endDrag,
+                    child: _NoteCard(
+                      note: note,
+                      selected: _selectedNotes.isNotEmpty
+                          ? _selectedNotes.contains(note.id)
+                          : null,
+                      onTap: _selectedNotes.isNotEmpty
+                          ? () => _toggleNote(note)
+                          : () => _openNote(note),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      );
+    },
   );
 }
 
