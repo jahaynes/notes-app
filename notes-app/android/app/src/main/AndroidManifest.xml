@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Release builds talk to the Notes API backend. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="noteish"
         android:name="${applicationName}"

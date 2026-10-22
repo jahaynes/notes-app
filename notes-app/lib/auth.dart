@@ -117,6 +117,8 @@ class AuthSession {
 
   /// Picks up a saved login, dropping it if the backend no longer accepts
   /// it, e.g. it has expired or the backend was restarted with a new key.
+  /// The app shows nothing until this finishes, so it never takes longer
+  /// than [_restoreTimeout] or throws.
   Future<void> restore() async {
     final saved = token;
     if (saved == null) return;
@@ -125,14 +127,17 @@ class AuthSession {
     // unknown.
     if (savedServer == null) return logOut();
     try {
-      _account.value = await _me(savedServer, saved);
+      _account.value = await _me(savedServer, saved).timeout(_restoreTimeout);
     } on WrongCredentials {
       await logOut();
-    } on Exception catch (e) {
-      // Offline, perhaps: keep the token for next time.
+    } catch (e) {
+      // Offline or unreachable, perhaps, or a reply it can't make sense
+      // of: keep the token for next time.
       debugPrint('Could not restore login: $e');
     }
   }
+
+  static const _restoreTimeout = Duration(seconds: 10);
 
   /// Logs in to the backend at [server]. Throws [WrongCredentials] if it
   /// turns them down.

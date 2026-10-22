@@ -14,23 +14,57 @@ import 'store/note_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Something on screen straight away, rather than nothing until the
+  // app is ready, and the error if it never gets there.
+  runApp(
+    _plainApp(const Scaffold(body: Center(child: CircularProgressIndicator()))),
+  );
+  try {
+    runApp(await _startApp());
+  } catch (e, stack) {
+    debugPrint('Could not start: $e\n$stack');
+    runApp(_plainApp(_StartFailed(error: e, stack: stack)));
+  }
+}
+
+Future<Widget> _startApp() async {
   final prefs = await SharedPreferences.getInstance();
   final client = http.Client();
   final auth = AuthSession(client, prefs);
   await auth.restore();
-  runApp(
-    LoggedInApp(
-      auth: auth,
-      openStore: (storage) => switch (storage) {
-        OnDevice() => LocalNoteStore.open(prefs),
-        // A turned-down token logs out, which goes back to the login screen.
-        OnServer(:final login) => HttpNoteStore.open(
-          client,
-          prefs,
-          login,
-          onRejected: () => auth.rejected(login.token),
+  return LoggedInApp(
+    auth: auth,
+    openStore: (storage) => switch (storage) {
+      OnDevice() => LocalNoteStore.open(prefs),
+      // A turned-down token logs out, which goes back to the login screen.
+      OnServer(:final login) => HttpNoteStore.open(
+        client,
+        prefs,
+        login,
+        onRejected: () => auth.rejected(login.token),
+      ),
+    },
+  );
+}
+
+/// Says the app couldn't start, with the error, as there's nowhere else
+/// to see it on a phone.
+class _StartFailed extends StatelessWidget {
+  const _StartFailed({required this.error, required this.stack});
+
+  final Object error;
+  final StackTrace stack;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: SelectableText(
+          "Couldn't start\n\n$error\n\n$stack",
+          style: const TextStyle(fontFamily: 'monospace'),
         ),
-      },
+      ),
     ),
   );
 }
