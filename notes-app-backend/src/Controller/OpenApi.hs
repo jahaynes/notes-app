@@ -11,7 +11,7 @@ import           Data.Aeson                       (Encoding, ToJSON (..), Value 
 import qualified Data.Aeson.Encoding as E
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
-import           Data.OpenApi                     (OpenApi, Tag (..), applyTagsFor, info, version)
+import           Data.OpenApi                     (OpenApi, Server (..), Tag (..), applyTagsFor, info, servers, version)
 import qualified Data.OpenApi as OpenApi
 import           Data.List                        (elemIndex, sortOn)
 import           Data.Maybe                       (fromMaybe)
@@ -30,6 +30,9 @@ notesOpenApi =
                        [Tag "topic" (Just "Topics, and the notes in them") Nothing]
         & applyTagsFor (subOperations (Proxy @NoteAPI)  (Proxy @NotesAPI))
                        [Tag "note"  (Just "Individual notes") Nothing]
+        -- Relative to wherever openapi.json is served from, so "Try it out"
+        -- keeps any path prefix a proxy put in front of the API, like /api
+        & servers .~ [Server "." Nothing mempty]
         & info . OpenApi.title .~ "Notes API"
         & info . version     .~ "0.1.0.0"
         & info . OpenApi.description ?~ "PUT returns 204 on a clean write, \
