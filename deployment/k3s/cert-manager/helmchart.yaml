@@ -1,0 +1,16 @@
+# Installed by k3s's own Helm controller. Applied on its own, ahead of
+# the app, because the app's Issuer and Certificate need its CRDs.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: cert-manager
+  namespace: kube-system
+spec:
+  repo: https://charts.jetstack.io
+  chart: cert-manager
+  version: v1.21.2
+  targetNamespace: cert-manager
+  createNamespace: true
+  valuesContent: |-
+    crds:
+      enabled: true

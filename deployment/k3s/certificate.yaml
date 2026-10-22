@@ -1,0 +1,32 @@
+# Let's Encrypt over HTTP-01: it fetches a token from
+# http://notes.johnhaynes.dev/.well-known/acme-challenge/, so the name
+# must resolve to this node and port 80 must be reachable from outside.
+#
+# Swap the server for
+#   https://acme-staging-v02.api.letsencrypt.org/directory
+# while debugging, to stay clear of production rate limits.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: letsencrypt
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-account
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: notes
+spec:
+  secretName: notes-tls
+  dnsNames:
+    - notes.johnhaynes.dev
+  issuerRef:
+    kind: Issuer
+    name: letsencrypt

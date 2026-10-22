@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeOperators         #-}
 
 module Controller.Controller ( app
+                             , loadCorsOrigins
                              ) where
 
 import Auth.Token
@@ -21,19 +22,20 @@ import qualified Data.Text.Encoding as TE
 import           Data.Time                        (getCurrentTime)
 import qualified Data.Vector as V
 import           Network.Wai                      (Request, requestHeaders)
-import           Network.Wai.Middleware.Cors      (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
+import           Network.Wai.Middleware.Cors      (CorsResourcePolicy (..), Origin, cors, simpleCorsResourcePolicy)
 import           Servant
 import           Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import           Servant.Swagger.UI               (SwaggerSchemaUI', swaggerSchemaUIServer')
+import           System.Environment               (lookupEnv)
 
 type ApiWithSwagger =
          SwaggerSchemaUI' "swagger-ui" ("openapi.json" :> Get '[JSON] OrderedSpec)
     :<|> NotesAPI
 
 app :: (NoteStore m, UserStore m, Fresh m, Log m, Clock m)
-    => SigningKey -> (forall a. m a -> IO a) -> Application
-app key runStore =
-    cors (const (Just localCors)) $
+    => SigningKey -> [Origin] -> (forall a. m a -> IO a) -> Application
+app key origins runStore =
+    cors (const (Just (corsPolicy origins))) $
         serveWithContext (Proxy @ApiWithSwagger) (authHandler key :. EmptyContext) $
                  swaggerSchemaUIServer' (pure (OrderedSpec (toJSON notesOpenApi)))
             :<|> loginHandler key runStore
@@ -152,12 +154,22 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                 Nothing   -> respond (WithStatus @204 NoBody)
                 Just note -> respond (WithStatus @409 (toView note))
 
-localCors :: CorsResourcePolicy
-localCors =
+-- | Browser origins allowed to call the API, comma-separated in
+-- CORS_ORIGINS, or the local development ones when it isn't set.
+loadCorsOrigins :: IO [Origin]
+loadCorsOrigins =
+    lookupEnv "CORS_ORIGINS" >>= \case
+        Just origins -> pure (parse (T.pack origins))
+        Nothing      -> pure [ "http://127.0.0.1:3000"
+                             , "http://127.0.0.1:8081"
+                             ]
+    where
+    parse = map TE.encodeUtf8 . filter (not . T.null) . map T.strip . T.splitOn ","
+
+corsPolicy :: [Origin] -> CorsResourcePolicy
+corsPolicy origins =
     simpleCorsResourcePolicy
-        { corsOrigins        = Just ([ "http://127.0.0.1:3000"
-                                     , "http://127.0.0.1:8081"
-                                     ], False)
+        { corsOrigins        = Just (origins, False)
         , corsMethods        = ["GET", "PUT", "POST", "DELETE", "OPTIONS"]
         , corsRequestHeaders = ["Content-Type", "Authorization", "Accept"]
         }

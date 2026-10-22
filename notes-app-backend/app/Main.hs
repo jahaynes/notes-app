@@ -1,7 +1,7 @@
 module Main (main) where
 
 import Auth.Token                       (loadSigningKey)
-import Controller.Controller            (app)
+import Controller.Controller            (app, loadCorsOrigins)
 import NoteStore.SQLite.NoteStoreSQLite (runNoteStoreSQLite)
 
 import Data.Function            ((&))
@@ -13,13 +13,14 @@ import Text.Read                (readMaybe)
 
 main :: IO ()
 main = do
-    key  <- loadSigningKey
-    host <- fromMaybe "127.0.0.1" <$> lookupEnv "HOST"
-    port <- lookupEnv "PORT" >>= \case
+    key     <- loadSigningKey
+    origins <- loadCorsOrigins
+    host    <- fromMaybe "127.0.0.1" <$> lookupEnv "HOST"
+    port    <- lookupEnv "PORT" >>= \case
         Nothing -> pure 8081
         Just p  -> maybe (fail ("PORT is not a number: " ++ p)) pure (readMaybe p)
     putStrLn ("Serving on http://" ++ host ++ ":" ++ show port ++ " (swagger at /swagger-ui)")
-    runSettings (settings host port) (app key (runNoteStoreSQLite "notes.db"))
+    runSettings (settings host port) (app key origins (runNoteStoreSQLite "notes.db"))
   where
     settings host port = defaultSettings
         & setHost (fromString host)

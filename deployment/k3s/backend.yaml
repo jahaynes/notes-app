@@ -1,0 +1,88 @@
+# SQLite lives on a single local-path volume, so there is exactly one
+# replica, and a rollout stops the old pod before starting the new one.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backend-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      # The binary runs as PID 1 without a SIGTERM handler, so it only
+      # stops on SIGKILL. Don't wait the default 30s for that.
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: backend
+          # Imported into k3s's containerd, not pulled from a registry
+          image: localhost/notes-app-backend:latest
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            # Without this, tokens are signed with a random key
+            # and every restart logs everyone out.
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: backend
+                  key: JWT_SECRET
+            # The app's origin, which browsers send even on same-origin
+            # POST/PUT/DELETE
+            - name: CORS_ORIGINS
+              value: https://notes.johnhaynes.dev
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          readinessProbe:
+            httpGet:
+              path: /openapi.json
+              port: http
+          livenessProbe:
+            tcpSocket:
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: backend-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+spec:
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

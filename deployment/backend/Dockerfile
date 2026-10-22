@@ -1,33 +1,7 @@
-
 # syntax=docker/dockerfile:1
 
-# ==========================================
-# Source: sparse checkout from GitHub
-# ==========================================
-FROM debian:bookworm-slim AS source
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        git \
-        ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
-
-ARG SOURCE_CACHEBUST=0
-
-RUN echo "Source refresh: ${SOURCE_CACHEBUST}" && \
-    git clone \
-        --depth 1 \
-        --filter=blob:none \
-        --sparse \
-        --branch master \
-        https://github.com/jahaynes/notes-app.git \
-        /tmp/repo && \
-    cd /tmp/repo && \
-    git sparse-checkout set notes-app-backend && \
-    mkdir -p /src && \
-    cp -a notes-app-backend/. /src/ && \
-    rm -rf /tmp/repo
-
+# Built from the local checkout, with the repo root as the context:
+#   podman build -f deployment/backend/Dockerfile -t notes-app-backend .
 
 # ==========================================
 # Builder: GHC and Cabal
@@ -54,9 +28,7 @@ RUN cabal update
 # Only package metadata at this point.
 # Changes to Haskell source won't invalidate
 # dependency compilation.
-COPY --from=source \
-    /src/notes-app-backend.cabal \
-    ./notes-app-backend.cabal
+COPY notes-app-backend/notes-app-backend.cabal ./
 
 # Compile external Haskell dependencies
 RUN cabal build \
@@ -64,7 +36,7 @@ RUN cabal build \
     pkg:notes-app-backend
 
 # Now add application source
-COPY --from=source /src/ ./
+COPY notes-app-backend/ ./
 
 # Compile executable
 RUN cabal build exe:notes-app-backend && \

@@ -1,0 +1,7 @@
+# Build context for deployment/*/Dockerfile is the repo root.
+# Keep local build output and data out of the images.
+.git
+**/dist-newstyle
+**/.dart_tool
+notes-app/build
+**/*.db

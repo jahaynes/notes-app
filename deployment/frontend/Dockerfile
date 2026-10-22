@@ -1,32 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# ==========================================
-# Source: sparse checkout from GitHub
-# ==========================================
-FROM debian:bookworm-slim AS source
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        git \
-        ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
-
-ARG SOURCE_CACHEBUST=0
-
-RUN echo "Source refresh: ${SOURCE_CACHEBUST}" && \
-    git clone \
-        --depth 1 \
-        --filter=blob:none \
-        --sparse \
-        --branch master \
-        https://github.com/jahaynes/notes-app.git \
-        /tmp/repo && \
-    cd /tmp/repo && \
-    git sparse-checkout set notes-app && \
-    mkdir -p /src && \
-    cp -a notes-app/. /src/ && \
-    rm -rf /tmp/repo
-
+# Built from the local checkout, with the repo root as the context:
+#   podman build -f deployment/frontend/Dockerfile -t notes-app-frontend .
 
 # ==========================================
 # Builder: Flutter SDK
@@ -74,14 +49,12 @@ WORKDIR /build
 # Only package metadata at this point.
 # Changes to Dart source won't invalidate
 # dependency resolution.
-COPY --from=source --chown=builder:builder \
-    /src/pubspec.* \
-    ./
+COPY --chown=builder:builder notes-app/pubspec.* ./
 
 RUN flutter pub get
 
 # Now add application source
-COPY --from=source --chown=builder:builder /src/ ./
+COPY --chown=builder:builder notes-app/ ./
 
 # The backend address is entered at the login
 # screen, so nothing about it is baked in here.
