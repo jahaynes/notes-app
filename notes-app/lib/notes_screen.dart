@@ -416,7 +416,13 @@ class _NotesScreenState extends State<NotesScreen> {
               ? 1
               : (width / 240).floor().clamp(2, 5);
           return SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
+            // Clear the FAB, and the system navigation bar under it.
+            padding: EdgeInsets.fromLTRB(
+              12,
+              8,
+              12,
+              96 + MediaQuery.paddingOf(context).bottom,
+            ),
             child: _Masonry(
               columns: columns,
               children: [
@@ -521,109 +527,116 @@ class _Sidebar extends StatelessWidget {
               alignment: Alignment.topLeft,
               minWidth: _width,
               maxWidth: _width,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Topics',
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(color: scheme.onSurfaceVariant),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.add),
-                          tooltip: 'Add topic',
-                          onPressed: () => _addTopic(context),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: ValueListenableBuilder(
-                      valueListenable: store.topics,
-                      builder: (context, topics, _) => ListTileTheme(
-                        selectedColor: scheme.onSecondaryContainer,
-                        selectedTileColor: scheme.secondaryContainer,
-                        child: ListView(
-                          children: [
-                            ListTile(
-                              dense: true,
-                              leading: const Icon(Icons.notes),
-                              title: const Text('(All)'),
-                              selected: selectedTopicId == null,
-                              enabled: !selecting,
-                              onTap: () => onSelect(null),
+              // Keep the footer clear of the system navigation bar, while the
+              // panel's background still reaches the bottom edge.
+              child: SafeArea(
+                top: false,
+                right: false,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Topics',
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(color: scheme.onSurfaceVariant),
                             ),
-                            for (final topic in topics)
-                              DragTarget<_NoteDrag>(
-                                key: ValueKey(topic.id),
-                                onAcceptWithDetails: (details) =>
-                                    onDropNotes(details.data.ids, topic.id),
-                                builder: (context, candidates, _) => ListTile(
-                                  dense: true,
-                                  // Highlight the topic a dragged note is over.
-                                  tileColor: candidates.isEmpty
-                                      ? null
-                                      : scheme.primaryContainer,
-                                  selected: topic.id == selectedTopicId,
-                                  // The default topic can't be ticked for deletion.
-                                  enabled:
-                                      !(selecting && store.isDefault(topic)),
-                                  onTap: selecting
-                                      ? () => onToggle(topic)
-                                      : () => onSelect(topic.id),
-                                  onLongPress: store.isDefault(topic)
-                                      ? null
-                                      : () => onToggle(topic),
-                                  trailing: selecting && !store.isDefault(topic)
-                                      ? Checkbox(
-                                          value: checkedTopicIds.contains(
-                                            topic.id,
-                                          ),
-                                          onChanged: (_) => onToggle(topic),
-                                        )
-                                      : null,
-                                  leading: Icon(
-                                    store.isDefault(topic)
-                                        ? Icons.inbox_outlined
-                                        : Icons.label_outline,
-                                  ),
-                                  title: Text(
-                                    topic.name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.add),
+                            tooltip: 'Add topic',
+                            onPressed: () => _addTopic(context),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: ValueListenableBuilder(
+                        valueListenable: store.topics,
+                        builder: (context, topics, _) => ListTileTheme(
+                          selectedColor: scheme.onSecondaryContainer,
+                          selectedTileColor: scheme.secondaryContainer,
+                          child: ListView(
+                            children: [
+                              ListTile(
+                                dense: true,
+                                leading: const Icon(Icons.notes),
+                                title: const Text('(All)'),
+                                selected: selectedTopicId == null,
+                                enabled: !selecting,
+                                onTap: () => onSelect(null),
+                              ),
+                              for (final topic in topics)
+                                DragTarget<_NoteDrag>(
+                                  key: ValueKey(topic.id),
+                                  onAcceptWithDetails: (details) =>
+                                      onDropNotes(details.data.ids, topic.id),
+                                  builder: (context, candidates, _) => ListTile(
+                                    dense: true,
+                                    // Highlight the topic a dragged note is over.
+                                    tileColor: candidates.isEmpty
+                                        ? null
+                                        : scheme.primaryContainer,
+                                    selected: topic.id == selectedTopicId,
+                                    // The default topic can't be ticked for deletion.
+                                    enabled:
+                                        !(selecting && store.isDefault(topic)),
+                                    onTap: selecting
+                                        ? () => onToggle(topic)
+                                        : () => onSelect(topic.id),
+                                    onLongPress: store.isDefault(topic)
+                                        ? null
+                                        : () => onToggle(topic),
+                                    trailing:
+                                        selecting && !store.isDefault(topic)
+                                        ? Checkbox(
+                                            value: checkedTopicIds.contains(
+                                              topic.id,
+                                            ),
+                                            onChanged: (_) => onToggle(topic),
+                                          )
+                                        : null,
+                                    leading: Icon(
+                                      store.isDefault(topic)
+                                          ? Icons.inbox_outlined
+                                          : Icons.label_outline,
+                                    ),
+                                    title: Text(
+                                      topic.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                                   ),
                                 ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  if (AppearanceScope.maybeOf(context)
-                      case final appearance?) ...[
-                    Divider(height: 1, color: scheme.outlineVariant),
-                    ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.palette_outlined),
-                      title: const Text('Theme'),
-                      trailing: Text(appearance.value.label),
-                      onTap: () => showDialog<void>(
-                        context: context,
-                        builder: (_) => _ThemeDialog(appearance: appearance),
+                    if (AppearanceScope.maybeOf(context)
+                        case final appearance?) ...[
+                      Divider(height: 1, color: scheme.outlineVariant),
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.palette_outlined),
+                        title: const Text('Theme'),
+                        trailing: Text(appearance.value.label),
+                        onTap: () => showDialog<void>(
+                          context: context,
+                          builder: (_) => _ThemeDialog(appearance: appearance),
+                        ),
                       ),
-                    ),
+                    ],
+                    if (auth case final auth?) ...[
+                      Divider(height: 1, color: scheme.outlineVariant),
+                      _UserSection(auth: auth),
+                    ],
                   ],
-                  if (auth case final auth?) ...[
-                    Divider(height: 1, color: scheme.outlineVariant),
-                    _UserSection(auth: auth),
-                  ],
-                ],
+                ),
               ),
             ),
           ),
