@@ -648,6 +648,41 @@ void main() {
     expect(store.notes.value.single.body, 'a\n• milk');
   });
 
+  testWidgets('undo puts back the body as it was, without making bullets', (
+    tester,
+  ) async {
+    final store = await _freshStore();
+    await tester.pumpWidget(NoteishApp(store: store));
+
+    await tester.tap(find.text('New note'));
+    await tester.pumpAndSettle();
+    final body = find.byType(TextField).last;
+    await tester.tap(body);
+    await tester.enterText(body, '• milk');
+    // Past the undo history's throttling, so each edit gets its own entry.
+    await tester.pump(const Duration(seconds: 1));
+    // Enter then backspace leaves a newline after a bullet...
+    await tester.enterText(body, '• milk\n');
+    await tester.enterText(body, '• milk\n•');
+    expect(store.notes.value.single.body, '• milk\n');
+    await tester.pump(const Duration(seconds: 1));
+    await tester.enterText(body, '• milk');
+    await tester.pump(const Duration(seconds: 1));
+
+    // ...comes back as it was, not as if Enter were typed again.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.control);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
+    await tester.pump();
+    expect(store.notes.value.single.body, '• milk\n');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.control);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyY);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
+    await tester.pump();
+    expect(store.notes.value.single.body, '• milk');
+  });
+
   testWidgets('edits survive leaving via a URL change (browser back)', (
     tester,
   ) async {

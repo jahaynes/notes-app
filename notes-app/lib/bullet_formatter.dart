@@ -10,13 +10,25 @@ const bullet = '•';
 ///
 /// Backspace straight after a conversion undoes it instead, so this
 /// remembers the last one: keep one instance across rebuilds. Only
-/// single-character insertions and deletions are touched, so pasted text,
-/// undo and larger edits pass through unchanged.
+/// single-character insertions and deletions are touched, so pasted text and
+/// larger edits pass through unchanged. Undo and redo go through formatters
+/// too, and can be single characters, so give the field [undoActions].
 class BulletFormatter extends TextInputFormatter {
   /// The value just after the last conversion to a bullet, and the value it
   /// replaced, until the next edit.
   TextEditingValue? _converted;
   TextEditingValue? _unconverted;
+
+  /// Whether edits pass through untouched, while undoing or redoing.
+  bool _off = false;
+
+  /// Actions for an [Actions] around the field, so that undo and redo put
+  /// back the text as it was, rather than it being formatted as if typed:
+  /// undoing a deleted newline after a bullet would otherwise add another.
+  late final Map<Type, Action<Intent>> undoActions = {
+    UndoTextIntent: _Unformatted<UndoTextIntent>(this),
+    RedoTextIntent: _Unformatted<RedoTextIntent>(this),
+  };
 
   @override
   TextEditingValue formatEditUpdate(
@@ -26,6 +38,7 @@ class BulletFormatter extends TextInputFormatter {
     final converted = _converted;
     final unconverted = _unconverted;
     _converted = _unconverted = null;
+    if (_off) return newValue;
     final cursor = newValue.selection;
     if (!cursor.isCollapsed || cursor.baseOffset < 0) return newValue;
     if (_isBackspace(oldValue, newValue)) {
@@ -106,6 +119,49 @@ class BulletFormatter extends TextInputFormatter {
     final lineStart = _lineStart(oldValue.text, pos);
     if (_prefixEnd(oldValue.text, lineStart) != pos) return null;
     return outdentBullets(oldValue);
+  }
+}
+
+/// Shortcuts for a [Shortcuts] around the field, so that undo and redo use
+/// Flutter's history on the web too. There Flutter leaves them to the browser,
+/// whose history is lost whenever a bullet edit replaces the text.
+const bulletUndoShortcuts = <ShortcutActivator, Intent>{
+  SingleActivator(LogicalKeyboardKey.keyZ, control: true): UndoTextIntent(
+    SelectionChangedCause.keyboard,
+  ),
+  SingleActivator(LogicalKeyboardKey.keyZ, meta: true): UndoTextIntent(
+    SelectionChangedCause.keyboard,
+  ),
+  SingleActivator(LogicalKeyboardKey.keyZ, control: true, shift: true):
+      RedoTextIntent(SelectionChangedCause.keyboard),
+  SingleActivator(LogicalKeyboardKey.keyZ, meta: true, shift: true):
+      RedoTextIntent(SelectionChangedCause.keyboard),
+  // As browsers on Windows have it.
+  SingleActivator(LogicalKeyboardKey.keyY, control: true): RedoTextIntent(
+    SelectionChangedCause.keyboard,
+  ),
+};
+
+/// Does the action it overrides with [formatter] off.
+class _Unformatted<T extends Intent> extends Action<T> {
+  _Unformatted(this.formatter);
+
+  final BulletFormatter formatter;
+
+  @override
+  bool isEnabled(T intent) => callingAction?.isEnabled(intent) ?? false;
+
+  @override
+  bool consumesKey(T intent) => callingAction?.consumesKey(intent) ?? false;
+
+  @override
+  Object? invoke(T intent) {
+    formatter._off = true;
+    try {
+      return callingAction?.invoke(intent);
+    } finally {
+      formatter._off = false;
+    }
   }
 }
 

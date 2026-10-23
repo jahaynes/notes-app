@@ -141,19 +141,27 @@ class _EditorScreenState extends State<EditorScreen> {
                     ): () =>
                         _body.value = outdentBullets(_body.value),
                   },
-                  child: TextField(
-                    controller: _body,
-                    maxLines: null,
-                    expands: true,
-                    textAlignVertical: TextAlignVertical.top,
-                    textCapitalization: TextCapitalization.sentences,
-                    keyboardType: TextInputType.multiline,
-                    inputFormatters: [_bulletFormatter],
-                    style: theme.textTheme.bodyLarge?.copyWith(color: fg),
-                    decoration: InputDecoration(
-                      hintText: 'Start writing…',
-                      hintStyle: TextStyle(color: fg.withValues(alpha: 0.4)),
-                      border: InputBorder.none,
+                  child: Shortcuts(
+                    shortcuts: bulletUndoShortcuts,
+                    child: Actions(
+                      actions: _bulletFormatter.undoActions,
+                      child: TextField(
+                        controller: _body,
+                        maxLines: null,
+                        expands: true,
+                        textAlignVertical: TextAlignVertical.top,
+                        textCapitalization: TextCapitalization.sentences,
+                        keyboardType: TextInputType.multiline,
+                        inputFormatters: [_bulletFormatter],
+                        style: theme.textTheme.bodyLarge?.copyWith(color: fg),
+                        decoration: InputDecoration(
+                          hintText: 'Start writing…',
+                          hintStyle: TextStyle(
+                            color: fg.withValues(alpha: 0.4),
+                          ),
+                          border: InputBorder.none,
+                        ),
+                      ),
                     ),
                   ),
                 ),
