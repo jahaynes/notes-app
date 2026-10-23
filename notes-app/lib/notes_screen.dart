@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import 'appearance.dart';
 import 'auth.dart';
+import 'bullet_formatter.dart';
 import 'note.dart';
 import 'store/note_store.dart';
 import 'topic.dart';
@@ -1001,7 +1002,8 @@ class _NoteCard extends StatelessWidget {
                     const SizedBox(height: 6),
                   if (note.body.trim().isNotEmpty)
                     Text(
-                      note.body,
+                      // Flutter draws tabs a space wide.
+                      note.body.replaceAll('\t', bulletIndent),
                       maxLines: note.showFull ? null : 8,
                       overflow: note.showFull ? null : TextOverflow.ellipsis,
                       style: theme.textTheme.bodyMedium?.copyWith(color: fg),

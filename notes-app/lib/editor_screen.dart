@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
+import 'bullet_formatter.dart';
 import 'note.dart';
 import 'store/note_store.dart';
 
@@ -22,7 +24,8 @@ class _EditorScreenState extends State<EditorScreen> {
   late Note _note = widget.note;
   late final _title = TextEditingController(text: _note.title)
     ..addListener(_save);
-  late final _body = TextEditingController(text: _note.body)
+  final _bulletFormatter = BulletFormatter();
+  late final _body = BulletEditingController(text: _note.body)
     ..addListener(_save);
 
   @override
@@ -127,18 +130,31 @@ class _EditorScreenState extends State<EditorScreen> {
                 textInputAction: TextInputAction.next,
               ),
               Expanded(
-                child: TextField(
-                  controller: _body,
-                  maxLines: null,
-                  expands: true,
-                  textAlignVertical: TextAlignVertical.top,
-                  textCapitalization: TextCapitalization.sentences,
-                  keyboardType: TextInputType.multiline,
-                  style: theme.textTheme.bodyLarge?.copyWith(color: fg),
-                  decoration: InputDecoration(
-                    hintText: 'Start writing…',
-                    hintStyle: TextStyle(color: fg.withValues(alpha: 0.4)),
-                    border: InputBorder.none,
+                // Tab edits the text rather than moving focus.
+                child: CallbackShortcuts(
+                  bindings: {
+                    const SingleActivator(LogicalKeyboardKey.tab): () =>
+                        _body.value = indentBullets(_body.value),
+                    const SingleActivator(
+                      LogicalKeyboardKey.tab,
+                      shift: true,
+                    ): () =>
+                        _body.value = outdentBullets(_body.value),
+                  },
+                  child: TextField(
+                    controller: _body,
+                    maxLines: null,
+                    expands: true,
+                    textAlignVertical: TextAlignVertical.top,
+                    textCapitalization: TextCapitalization.sentences,
+                    keyboardType: TextInputType.multiline,
+                    inputFormatters: [_bulletFormatter],
+                    style: theme.textTheme.bodyLarge?.copyWith(color: fg),
+                    decoration: InputDecoration(
+                      hintText: 'Start writing…',
+                      hintStyle: TextStyle(color: fg.withValues(alpha: 0.4)),
+                      border: InputBorder.none,
+                    ),
                   ),
                 ),
               ),

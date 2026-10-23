@@ -594,6 +594,60 @@ void main() {
     expect(titled('Three').colorIndex, 0);
   });
 
+  testWidgets('tab indents bullets in the note body instead of moving focus', (
+    tester,
+  ) async {
+    final store = await _freshStore();
+    await tester.pumpWidget(NoteishApp(store: store));
+
+    await tester.tap(find.text('New note'));
+    await tester.pumpAndSettle();
+    final body = find.byType(TextField).last;
+    await tester.tap(body);
+    await tester.enterText(body, '• milk');
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    expect(store.notes.value.single.body, '    • milk');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shift);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shift);
+    await tester.pump();
+    expect(store.notes.value.single.body, '• milk');
+
+    final editable = tester.widget<EditableText>(
+      find.descendant(of: body, matching: find.byType(EditableText)),
+    );
+    expect(editable.focusNode.hasFocus, isTrue);
+  });
+
+  testWidgets('arrow keys and backspace treat a bullet indent as a unit', (
+    tester,
+  ) async {
+    final store = await _freshStore();
+    await tester.pumpWidget(NoteishApp(store: store));
+
+    await tester.tap(find.text('New note'));
+    await tester.pumpAndSettle();
+    final body = find.byType(TextField).last;
+    await tester.tap(body);
+    await tester.enterText(body, 'a\n    • milk');
+    final controller = tester.widget<TextField>(body).controller!;
+    controller.selection = const TextSelection.collapsed(offset: 8);
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(controller.selection.baseOffset, 2);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(controller.selection.baseOffset, 8);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+    await tester.pump();
+    expect(store.notes.value.single.body, 'a\n• milk');
+  });
+
   testWidgets('edits survive leaving via a URL change (browser back)', (
     tester,
   ) async {
