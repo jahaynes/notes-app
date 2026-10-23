@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'appearance.dart';
 import 'auth.dart';
 import 'editor_screen.dart';
 import 'login_screen.dart';
@@ -17,13 +18,19 @@ Future<void> main() async {
   // Something on screen straight away, rather than nothing until the
   // app is ready, and the error if it never gets there.
   runApp(
-    _plainApp(const Scaffold(body: Center(child: CircularProgressIndicator()))),
+    const _PlainApp(
+      home: Scaffold(body: Center(child: CircularProgressIndicator())),
+    ),
   );
   try {
     runApp(await _startApp());
   } catch (e, stack) {
     debugPrint('Could not start: $e\n$stack');
-    runApp(_plainApp(_StartFailed(error: e, stack: stack)));
+    runApp(
+      _PlainApp(
+        home: _StartFailed(error: e, stack: stack),
+      ),
+    );
   }
 }
 
@@ -32,18 +39,21 @@ Future<Widget> _startApp() async {
   final client = http.Client();
   final auth = AuthSession(client, prefs);
   await auth.restore();
-  return LoggedInApp(
-    auth: auth,
-    openStore: (storage) => switch (storage) {
-      OnDevice() => LocalNoteStore.open(prefs),
-      // A turned-down token logs out, which goes back to the login screen.
-      OnServer(:final login) => HttpNoteStore.open(
-        client,
-        prefs,
-        login,
-        onRejected: () => auth.rejected(login.token),
-      ),
-    },
+  return AppearanceScope(
+    appearance: Appearance(prefs),
+    child: LoggedInApp(
+      auth: auth,
+      openStore: (storage) => switch (storage) {
+        OnDevice() => LocalNoteStore.open(prefs),
+        // A turned-down token logs out, which goes back to the login screen.
+        OnServer(:final login) => HttpNoteStore.open(
+          client,
+          prefs,
+          login,
+          onRejected: () => auth.rejected(login.token),
+        ),
+      },
+    ),
   );
 }
 
@@ -69,19 +79,25 @@ class _StartFailed extends StatelessWidget {
   );
 }
 
-ThemeData _theme(Brightness brightness) => ThemeData(
-  colorSchemeSeed: const Color(0xFFF2B33D),
-  brightness: brightness,
-  useMaterial3: true,
-);
+/// The app showing just [home], in the picked palette, for before there are
+/// notes to show.
+class _PlainApp extends StatelessWidget {
+  const _PlainApp({required this.home});
 
-MaterialApp _plainApp(Widget home) => MaterialApp(
-  title: 'Noteish',
-  debugShowCheckedModeBanner: false,
-  theme: _theme(Brightness.light),
-  darkTheme: _theme(Brightness.dark),
-  home: home,
-);
+  final Widget home;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppearanceScope.paletteOf(context);
+    return MaterialApp(
+      title: 'Noteish',
+      debugShowCheckedModeBanner: false,
+      theme: palette.theme(Brightness.light),
+      darkTheme: palette.theme(Brightness.dark),
+      home: home,
+    );
+  }
+}
 
 /// The app: a login screen until someone is logged in to a backend or picks
 /// this device, then the notes from the store [openStore] opens for that.
@@ -128,7 +144,7 @@ class _LoggedInAppState extends State<LoggedInApp> {
 
   @override
   Widget build(BuildContext context) => switch (_opened) {
-    null => _plainApp(LoginScreen(auth: widget.auth)),
+    null => _PlainApp(home: LoginScreen(auth: widget.auth)),
     (:final id, :final store) => FutureBuilder(
       key: ValueKey(id),
       future: store,
@@ -137,15 +153,15 @@ class _LoggedInAppState extends State<LoggedInApp> {
           store: data,
           auth: widget.auth,
         ),
-        AsyncSnapshot(:final error?) => _plainApp(
-          _OpenFailed(
+        AsyncSnapshot(:final error?) => _PlainApp(
+          home: _OpenFailed(
             error: error,
             onRetry: () => setState(() => _opened = _open(widget.auth.storage)),
             onLogOut: widget.auth.logOut,
           ),
         ),
-        _ => _plainApp(
-          const Scaffold(body: Center(child: CircularProgressIndicator())),
+        _ => const _PlainApp(
+          home: Scaffold(body: Center(child: CircularProgressIndicator())),
         ),
       },
     ),
@@ -265,11 +281,14 @@ class _NoteishAppState extends State<NoteishApp> {
   }
 
   @override
-  Widget build(BuildContext context) => MaterialApp.router(
-    title: 'Noteish',
-    debugShowCheckedModeBanner: false,
-    theme: _theme(Brightness.light),
-    darkTheme: _theme(Brightness.dark),
-    routerConfig: _router,
-  );
+  Widget build(BuildContext context) {
+    final palette = AppearanceScope.paletteOf(context);
+    return MaterialApp.router(
+      title: 'Noteish',
+      debugShowCheckedModeBanner: false,
+      theme: palette.theme(Brightness.light),
+      darkTheme: palette.theme(Brightness.dark),
+      routerConfig: _router,
+    );
+  }
 }

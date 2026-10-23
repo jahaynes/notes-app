@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'appearance.dart';
 import 'auth.dart';
 import 'note.dart';
 import 'store/note_store.dart';
@@ -604,6 +605,20 @@ class _Sidebar extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (AppearanceScope.maybeOf(context)
+                      case final appearance?) ...[
+                    Divider(height: 1, color: scheme.outlineVariant),
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.palette_outlined),
+                      title: const Text('Theme'),
+                      trailing: Text(appearance.value.label),
+                      onTap: () => showDialog<void>(
+                        context: context,
+                        builder: (_) => _ThemeDialog(appearance: appearance),
+                      ),
+                    ),
+                  ],
                   if (auth case final auth?) ...[
                     Divider(height: 1, color: scheme.outlineVariant),
                     _UserSection(auth: auth),
@@ -678,6 +693,102 @@ class _UserSection extends StatelessWidget {
       // goes.
       _ => const SizedBox.shrink(),
     },
+  );
+}
+
+/// Lists the built-in palettes, each shown in its own colours, and switches
+/// to the one tapped.
+class _ThemeDialog extends StatelessWidget {
+  const _ThemeDialog({required this.appearance});
+
+  final Appearance appearance;
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    return SimpleDialog(
+      title: const Text('Theme'),
+      children: [
+        for (final palette in Palette.values)
+          _PaletteOption(
+            theme: palette.theme(brightness),
+            label: palette.label,
+            selected: palette == appearance.value,
+            onTap: () {
+              appearance.pick(palette);
+              Navigator.pop(context);
+            },
+          ),
+      ],
+    );
+  }
+}
+
+/// A palette to pick, drawn in that palette's [theme] rather than the
+/// current one, so it previews how the app would look.
+class _PaletteOption extends StatelessWidget {
+  const _PaletteOption({
+    required this.theme,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final ThemeData theme;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = theme.colorScheme;
+    // Its own theme, so the ink when tapped is in its colours too.
+    return Theme(
+      data: theme,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        child: ListTile(
+          tileColor: scheme.primaryContainer,
+          textColor: scheme.onPrimaryContainer,
+          iconColor: scheme.primary,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: selected
+                ? BorderSide(color: scheme.primary, width: 2)
+                : BorderSide.none,
+          ),
+          leading: Icon(selected ? Icons.check_circle : Icons.circle_outlined),
+          title: Text(label),
+          trailing: _Swatch(scheme: scheme),
+          onTap: onTap,
+        ),
+      ),
+    );
+  }
+}
+
+/// Dots of a scheme's primary, secondary and tertiary colours.
+class _Swatch extends StatelessWidget {
+  const _Swatch({required this.scheme});
+
+  final ColorScheme scheme;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    spacing: 4,
+    children: [
+      for (final color in [scheme.primary, scheme.secondary, scheme.tertiary])
+        Container(
+          width: 16,
+          height: 16,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            border: Border.all(color: scheme.outlineVariant),
+          ),
+        ),
+    ],
   );
 }
 

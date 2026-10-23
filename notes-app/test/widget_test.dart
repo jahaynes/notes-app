@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:noteish/appearance.dart';
 import 'package:noteish/store/local_note_store.dart';
 import 'package:go_router/go_router.dart';
 import 'package:noteish/editor_screen.dart';
@@ -610,5 +611,56 @@ void main() {
     expect(find.byType(EditorScreen), findsNothing);
     expect(find.text('Kept'), findsOneWidget);
     expect(store.notes.value.single.title, 'Kept');
+  });
+
+  testWidgets('a theme picked in the sidebar is shown and kept', (
+    tester,
+  ) async {
+    final store = await _freshStore();
+    final prefs = await SharedPreferences.getInstance();
+    await tester.pumpWidget(
+      AppearanceScope(
+        appearance: Appearance(prefs),
+        child: NoteishApp(store: store),
+      ),
+    );
+    Color primary() =>
+        Theme.of(tester.element(find.byType(Scaffold).first))
+            .colorScheme
+            .primary;
+    final honey = primary();
+
+    await tester.tap(find.byTooltip('Show sidebar'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, 'Honey'), findsOneWidget);
+    await tester.tap(find.widgetWithText(ListTile, 'Theme'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ListTile, 'Ocean'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SimpleDialog), findsNothing);
+    expect(find.widgetWithText(ListTile, 'Ocean'), findsOneWidget);
+    expect(primary(), isNot(honey));
+    expect(Appearance(prefs).value, Palette.ocean);
+  });
+
+  test('an unknown saved theme falls back to the default', () async {
+    SharedPreferences.setMockInitialValues({'appearance_palette_v1': 'gone'});
+    final appearance = Appearance(await SharedPreferences.getInstance());
+    expect(appearance.value, Palette.fallback);
+  });
+
+  test('neon themes are dark even in light mode', () {
+    for (final palette in Palette.values) {
+      expect(
+        palette.theme(Brightness.light).brightness,
+        palette.alwaysDark ? Brightness.dark : Brightness.light,
+        reason: palette.label,
+      );
+    }
+    expect(
+      Palette.grid.theme(Brightness.light).colorScheme.primary,
+      Palette.grid.seed,
+    );
   });
 }
