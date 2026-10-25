@@ -12,7 +12,8 @@ const bullet = '•';
 /// remembers the last one: keep one instance across rebuilds. Only
 /// single-character insertions and deletions are touched, so pasted text and
 /// larger edits pass through unchanged. Undo and redo go through formatters
-/// too, and can be single characters, so give the field [undoActions].
+/// too, and can be single characters, so give the field [undoActions], and
+/// call [unformatted] around any undo or redo done otherwise.
 class BulletFormatter extends TextInputFormatter {
   /// The value just after the last conversion to a bullet, and the value it
   /// replaced, until the next edit.
@@ -29,6 +30,16 @@ class BulletFormatter extends TextInputFormatter {
     UndoTextIntent: _Unformatted<UndoTextIntent>(this),
     RedoTextIntent: _Unformatted<RedoTextIntent>(this),
   };
+
+  /// Runs [edit], such as an undo or redo, with formatting off.
+  R unformatted<R>(R Function() edit) {
+    _off = true;
+    try {
+      return edit();
+    } finally {
+      _off = false;
+    }
+  }
 
   @override
   TextEditingValue formatEditUpdate(
@@ -155,14 +166,8 @@ class _Unformatted<T extends Intent> extends Action<T> {
   bool consumesKey(T intent) => callingAction?.consumesKey(intent) ?? false;
 
   @override
-  Object? invoke(T intent) {
-    formatter._off = true;
-    try {
-      return callingAction?.invoke(intent);
-    } finally {
-      formatter._off = false;
-    }
-  }
+  Object? invoke(T intent) =>
+      formatter.unformatted(() => callingAction?.invoke(intent));
 }
 
 TextEditingValue _replace(

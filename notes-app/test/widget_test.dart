@@ -683,6 +683,44 @@ void main() {
     expect(store.notes.value.single.body, '• milk');
   });
 
+  testWidgets('app bar buttons indent, outdent, undo and redo the body', (
+    tester,
+  ) async {
+    // A small phone, so the buttons have to fit beside the others.
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final store = await _freshStore();
+    await tester.pumpWidget(NoteishApp(store: store));
+
+    await tester.tap(find.text('New note'));
+    await tester.pumpAndSettle();
+    final body = find.byType(TextField).last;
+    await tester.tap(body);
+    await tester.enterText(body, '• milk');
+    await tester.pump(const Duration(seconds: 1));
+
+    await tester.tap(find.byTooltip('Indent'));
+    await tester.pump(const Duration(seconds: 1));
+    expect(store.notes.value.single.body, '    • milk');
+    await tester.tap(find.byTooltip('Outdent'));
+    await tester.pump(const Duration(seconds: 1));
+    expect(store.notes.value.single.body, '• milk');
+
+    await tester.tap(find.byTooltip('Undo'));
+    await tester.pump();
+    expect(store.notes.value.single.body, '    • milk');
+    await tester.tap(find.byTooltip('Redo'));
+    await tester.pump();
+    expect(store.notes.value.single.body, '• milk');
+
+    // The body keeps the focus, so the keyboard stays up.
+    final editable = tester.widget<EditableText>(
+      find.descendant(of: body, matching: find.byType(EditableText)),
+    );
+    expect(editable.focusNode.hasFocus, isTrue);
+  });
+
   testWidgets('edits survive leaving via a URL change (browser back)', (
     tester,
   ) async {

@@ -27,11 +27,13 @@ class _EditorScreenState extends State<EditorScreen> {
   final _bulletFormatter = BulletFormatter();
   late final _body = BulletEditingController(text: _note.body)
     ..addListener(_save);
+  final _undo = UndoHistoryController();
 
   @override
   void dispose() {
     _title.dispose();
     _body.dispose();
+    _undo.dispose();
     widget.store.flush();
     super.dispose();
   }
@@ -52,6 +54,55 @@ class _EditorScreenState extends State<EditorScreen> {
     );
     widget.store.dispatch(SaveNote(_note));
   }
+
+  void _indent() => _body.value = indentBullets(_body.value);
+
+  void _outdent() => _body.value = outdentBullets(_body.value);
+
+  /// Buttons for editing the body, in the middle of the app bar. Tapping
+  /// them leaves the focus (and the keyboard) where it was. On the narrowest
+  /// screens they shrink rather than overflow.
+  Widget _editButtons() => TextFieldTapRegion(
+    child: FittedBox(
+      fit: BoxFit.scaleDown,
+      child: ValueListenableBuilder(
+        valueListenable: _undo,
+        builder: (context, history, _) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: 'Undo',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.undo),
+              onPressed: history.canUndo
+                  ? () => _bulletFormatter.unformatted(_undo.undo)
+                  : null,
+            ),
+            IconButton(
+              tooltip: 'Redo',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.redo),
+              onPressed: history.canRedo
+                  ? () => _bulletFormatter.unformatted(_undo.redo)
+                  : null,
+            ),
+            IconButton(
+              tooltip: 'Outdent',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.format_indent_decrease),
+              onPressed: _outdent,
+            ),
+            IconButton(
+              tooltip: 'Indent',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.format_indent_increase),
+              onPressed: _indent,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   void _delete() {
     widget.store.dispatch(DeleteNotes([_note.id]));
@@ -99,6 +150,9 @@ class _EditorScreenState extends State<EditorScreen> {
       appBar: AppBar(
         backgroundColor: bg,
         foregroundColor: bg != null ? Colors.black87 : null,
+        title: _editButtons(),
+        centerTitle: true,
+        titleSpacing: 0,
         actions: [
           IconButton(
             tooltip: 'Topic',
@@ -133,13 +187,9 @@ class _EditorScreenState extends State<EditorScreen> {
                 // Tab edits the text rather than moving focus.
                 child: CallbackShortcuts(
                   bindings: {
-                    const SingleActivator(LogicalKeyboardKey.tab): () =>
-                        _body.value = indentBullets(_body.value),
-                    const SingleActivator(
-                      LogicalKeyboardKey.tab,
-                      shift: true,
-                    ): () =>
-                        _body.value = outdentBullets(_body.value),
+                    const SingleActivator(LogicalKeyboardKey.tab): _indent,
+                    const SingleActivator(LogicalKeyboardKey.tab, shift: true):
+                        _outdent,
                   },
                   child: Shortcuts(
                     shortcuts: bulletUndoShortcuts,
@@ -147,6 +197,7 @@ class _EditorScreenState extends State<EditorScreen> {
                       actions: _bulletFormatter.undoActions,
                       child: TextField(
                         controller: _body,
+                        undoController: _undo,
                         maxLines: null,
                         expands: true,
                         textAlignVertical: TextAlignVertical.top,
