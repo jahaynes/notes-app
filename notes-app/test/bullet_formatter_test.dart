@@ -171,8 +171,24 @@ void main() {
       expect(_marked(outdentBullets(_value('|    • a\n• b|'))), '|• a\nb|');
     });
 
-    test('leaves plain lines alone', () {
-      expect(_marked(outdentBullets(_value('  pl|ain'))), '  pl|ain');
+    test('removes one level from plain lines', () {
+      expect(_marked(outdentBullets(_value('      pl|ain'))), '  pl|ain');
+      expect(_marked(outdentBullets(_value('\t\tpl|ain'))), '\tpl|ain');
+      expect(_marked(outdentBullets(_value('|\ta\nb\n  c|'))), '|a\nb\nc|');
+    });
+
+    test('leaves bullet lines\' plain neighbours alone', () {
+      expect(_marked(outdentBullets(_value('  |a\n  • b|'))), '  |a\n• b|');
+    });
+
+    test('deletes a tab before the cursor on an unindented line', () {
+      expect(_marked(outdentBullets(_value('a\t|c'))), 'a|c');
+      expect(_marked(outdentBullets(_value('pl|ain'))), 'pl|ain');
+    });
+
+    test('undoes indenting a plain line', () {
+      expect(_marked(outdentBullets(indentBullets(_value('|a')))), '|a');
+      expect(_marked(outdentBullets(indentBullets(_value('a|b')))), 'a|b');
     });
 
     test('keeps a cursor inside the removed indent on the line', () {

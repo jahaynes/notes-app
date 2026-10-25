@@ -341,23 +341,46 @@ TextEditingValue indentBullets(TextEditingValue value) {
 }
 
 /// Removes one level of indentation from every bullet line the selection
-/// touches, or the bullet itself from those with none.
+/// touches, or the bullet itself from those with none. With no bullet lines,
+/// it removes a level from each indented line instead, or failing that, the
+/// tab just before the cursor, undoing [indentBullets] there.
 TextEditingValue outdentBullets(TextEditingValue value) =>
-    _editBulletLines(value, (line) {
-      if (line.startsWith('\t')) return '\t';
-      // Up to a level of spaces, so shallower indents still line up after.
-      final spaces = _levelOfSpaces.matchAsPrefix(line);
-      return spaces?[0] ?? '$bullet ';
-    }, remove: true) ??
+    _editBulletLines(value, _outdentPrefix, remove: true) ??
+    _editBulletLines(value, _outdentPrefix, remove: true, lines: _indented) ??
+    _deleteTabBefore(value) ??
     value;
 
+/// The prefix outdenting [line] removes.
+String _outdentPrefix(String line) {
+  if (line.startsWith('\t')) return '\t';
+  // Up to a level of spaces, so shallower indents still line up after.
+  final spaces = _levelOfSpaces.matchAsPrefix(line);
+  return spaces?[0] ?? '$bullet ';
+}
+
+final _indented = RegExp('[ \t]');
+
+/// [value] without the tab just before its collapsed cursor, or null if
+/// there's none.
+TextEditingValue? _deleteTabBefore(TextEditingValue value) {
+  final cursor = value.selection;
+  final pos = cursor.baseOffset;
+  if (!cursor.isValid || !cursor.isCollapsed || pos > value.text.length) {
+    return null;
+  }
+  if (pos < 1 || value.text[pos - 1] != '\t') return null;
+  return _replace(value, pos - 1, pos, '', pos - 1);
+}
+
 /// Adds (or with [remove], strips) the prefix given by [prefixFor] at the
-/// start of each bullet line in the selection, keeping the selection on the
-/// same text. Returns null if the selection touches no bullet lines.
+/// start of each bullet line (or line starting with [lines]) in the
+/// selection, keeping the selection on the same text. Returns null if the
+/// selection touches no such lines.
 TextEditingValue? _editBulletLines(
   TextEditingValue value,
   String Function(String line) prefixFor, {
   bool remove = false,
+  RegExp? lines,
 }) {
   final selection = value.selection;
   final text = value.text;
@@ -373,7 +396,7 @@ TextEditingValue? _editBulletLines(
     final newline = text.indexOf('\n', lineStart);
     final lineEnd = newline == -1 ? text.length : newline;
     var line = text.substring(lineStart, lineEnd);
-    if (_bulletPrefix.matchAsPrefix(line) != null) {
+    if ((lines ?? _bulletPrefix).matchAsPrefix(line) != null) {
       touched = true;
       final prefix = prefixFor(line);
       final at = out.length;
