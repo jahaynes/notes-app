@@ -1,10 +1,10 @@
-module NotesApp ( addTopic
-                , authenticate
+module NotesApp ( authenticate
                 , delete
                 , deleteTopicFor
                 , load
                 , notesFor
                 , register
+                , shareTopic
                 , store
                 , storeTopicFor
                 , topicsFor
@@ -19,26 +19,53 @@ import           NoteStore.Class
 import qualified Data.Map.Strict as M
 import           Data.Vector          (Vector)
 
+-- | The note, if there is one and it's in one of the user's topics.
 load :: NoteStore m
-     => NoteId -> m (Maybe Note)
-load = loadNote
+     => UserId -> NoteId -> m (Access (Maybe Note))
+load userId noteId =
+
+    loadNote noteId >>= \case
+
+        Just note@(Note _ _ _ _ _ _ topicId _) ->
+            hasTopic userId topicId >>= \case
+                True  -> pure (Granted (Just note))
+                False -> pure Denied
+
+        Nothing ->
+            pure (Granted Nothing)
 
 notesFor :: NoteStore m
-         => TopicId -> m (Vector Note)
-notesFor = notesForTopic
+         => UserId -> TopicId -> m (Access (Vector Note))
+notesFor userId topicId =
+
+    hasTopic userId topicId >>= \case
+        True  -> Granted <$> notesForTopic topicId
+        False -> pure Denied
 
 topicsFor :: NoteStore m
           => UserId -> m (Vector Topic)
 topicsFor = loadTopicsForUser
 
-addTopic :: NoteStore m
-         => UserId -> TopicId -> m ()
-addTopic = addTopicForUser
+-- | Gives the grantee a topic the sharer has. Nothing if there's no such
+-- grantee.
+shareTopic :: (NoteStore m, UserStore m)
+           => UserId -> UserId -> TopicId -> m (Access (Maybe ()))
+shareTopic sharerId granteeId topicId =
+
+    hasTopic sharerId topicId >>= \case
+
+        False ->
+            pure Denied
+
+        True ->
+            loadUser granteeId >>= \case
+                Nothing -> pure (Granted Nothing)
+                Just _  -> Granted . Just <$> addTopicForUser granteeId topicId
 
 store :: (NoteStore m, Log m, Clock m)
       => UserId -> DeviceId -> NoteId -> Maybe VectorClock
       -> Title -> Content -> ColorIndex -> Bool -> TopicId
-      -> m (Maybe Note)
+      -> m (Written Note)
 store userId deviceId noteId mVc title content colorIndex showFull topicId = do
 
     let userDevice  = UserDevice userId deviceId
@@ -50,29 +77,35 @@ store userId deviceId noteId mVc title content colorIndex showFull topicId = do
 
         Clean -> do
             lPutStrLn "Note created"
-            pure Nothing
+            pure Clean
 
-        Conflicted ->
-            loadNote noteId
+        Conflicted () ->
+            maybe Clean Conflicted <$> loadNote noteId
+
+        Forbidden ->
+            pure Forbidden
 
 delete :: (NoteStore m, Log m)
-       => NoteId -> VectorClock -> m (Maybe Note)
-delete noteId vectorClock =
+       => UserId -> NoteId -> VectorClock -> m (Written Note)
+delete userId noteId vectorClock =
 
-    deleteNote noteId vectorClock >>= \case
+    deleteNote userId noteId vectorClock >>= \case
 
         Clean -> do
             lPutStrLn "Note deleted"
-            pure Nothing
+            pure Clean
 
-        Conflicted ->
-            loadNote noteId
+        Conflicted () ->
+            maybe Clean Conflicted <$> loadNote noteId
+
+        Forbidden ->
+            pure Forbidden
 
 
 storeTopicFor :: (NoteStore m, Log m, Clock m)
               => UserId -> DeviceId -> TopicId -> Maybe VectorClock
               -> TopicName -> Maybe TopicDescription
-              -> m (Maybe Topic)
+              -> m (Written Topic)
 storeTopicFor userId deviceId topicId mVc name mDescription = do
 
     let userDevice  = UserDevice userId deviceId
@@ -84,10 +117,13 @@ storeTopicFor userId deviceId topicId mVc name mDescription = do
 
         Clean -> do
             lPutStrLn "Topic created"
-            pure Nothing
+            pure Clean
 
-        Conflicted ->
-            loadTopic topicId
+        Conflicted () ->
+            maybe Clean Conflicted <$> loadTopic topicId
+
+        Forbidden ->
+            pure Forbidden
 
 deleteTopicFor :: (NoteStore m, Log m, Clock m)
                => UserId -> DeviceId -> TopicId -> VectorClock -> TopicId
@@ -107,6 +143,9 @@ deleteTopicFor userId deviceId topicId vectorClock destination = do
 
         TopicRefused refusal ->
             pure (TopicRefused refusal)
+
+        TopicForbidden ->
+            pure TopicForbidden
 
 register :: (UserStore m, Fresh m, Log m, Clock m)
          => Username -> Password

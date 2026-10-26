@@ -40,14 +40,19 @@ notesOpenApi =
                                 \DELETE likewise returns 204 once the note is gone \
                                 \(including if it never existed), or 409 with the stored note. \
                                 \Deleting a topic moves its notes to moveNotesTo, or returns 422 with \
-                                \NoSuchDestination if that topic doesn't exist or is the one being deleted, \
+                                \NoSuchDestination if that topic doesn't exist, isn't one of the user's, \
+                                \or is the one being deleted, \
                                 \or SharedWithNotes if the topic still has notes and more than one user. \
                                 \POST /user creates a user along with a topic of theirs named Uncategorised, \
                                 \returning 201 with the new user, 409 if the username is taken, or 422 with \
                                 \BlankUsername or EmptyPassword. \
                                 \POST /login returns a bearer token, or 401 for a wrong username or password; \
                                 \use Authorize to log in here. Every other endpoint but POST /user needs that token, \
-                                \and returns 403 if the userId in its path or body isn't the token's user."
+                                \and returns 403 if the userId in its body isn't the token's user. \
+                                \Topics, and the notes in them, are only readable and writable by the users who have them; \
+                                \anything else returns 403. Creating a topic nobody has gives it to its creator, and \
+                                \PUT /user/{userId}/topics/{topicId} lets a user who has a topic give it to another user \
+                                \(404 if there's no such user). GET /user/{userId}/topics returns 403 for any user but the token's."
 
 newtype OrderedSpec = OrderedSpec Value
 

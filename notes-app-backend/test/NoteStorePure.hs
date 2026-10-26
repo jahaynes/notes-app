@@ -80,6 +80,9 @@ instance Log NoteStorePure where
 
 instance NoteStore NoteStorePure where
 
+    hasTopic :: UserId -> TopicId -> NoteStorePure Bool
+    hasTopic uid tid = NoteStorePure $ gets (has uid tid . userTopics)
+
     topicsForUser :: UserId -> NoteStorePure (Vector TopicId)
     topicsForUser uid = NoteStorePure $
         gets (V.fromList . maybe [] S.toAscList . M.lookup uid . userTopics)
@@ -97,17 +100,24 @@ instance NoteStore NoteStorePure where
     loadTopic :: TopicId -> NoteStorePure (Maybe Topic)
     loadTopic tid = NoteStorePure $ gets (M.lookup tid . topics)
 
-    storeTopic :: UserId -> Topic -> NoteStorePure Written
-    storeTopic uid topic@(Topic tid _ _ _ _) = NoteStorePure $
+    storeTopic :: UserId -> Topic -> NoteStorePure (Written ())
+    storeTopic uid topic@(Topic tid _ _ _ _) = NoteStorePure $ do
 
-        gets (M.lookup tid . topics) >>= \case
+        Store ns ts uts us <- get
+
+        let unclaimed = not (any (S.member tid) uts)
+                     && M.notMember tid ts
+                     && not (any (\(Note _ _ _ _ _ _ ntid _) -> ntid == tid) ns)
+
+        case M.lookup tid ts of
+
+            _ | not (unclaimed || has uid tid uts) -> pure Forbidden
 
             Just storedTopic
-                | not (topic `isNewerThan` storedTopic) -> pure Conflicted
+                | not (topic `isNewerThan` storedTopic) -> pure (Conflicted ())
 
             _ -> do
-                modify' $ \(Store ns ts uts us) ->
-                    Store ns (M.insert tid topic ts) (grant uid tid uts) us
+                put (Store ns (M.insert tid topic ts) (grant uid tid uts) us)
                 pure Clean
 
     deleteTopic :: UserDevice -> UTCTime -> TopicId -> VectorClock -> TopicId
@@ -121,7 +131,10 @@ instance NoteStore NoteStorePure where
 
         case M.lookup tid ts of
 
-            _ | dest == tid || M.notMember dest ts -> pure (TopicRefused NoSuchDestination)
+            _ | not (has uid tid uts) -> pure TopicForbidden
+
+            _ | dest == tid || M.notMember dest ts || not (has uid dest uts) ->
+                pure (TopicRefused NoSuchDestination)
 
             _ | hasNotes && userCount > 1 -> pure (TopicRefused SharedWithNotes)
 
@@ -131,7 +144,7 @@ instance NoteStore NoteStorePure where
             _ -> do
                 put $ Store (M.map move ns)
                             (M.delete tid ts)
-                            (grant uid dest (M.map (S.delete tid) uts))
+                            (M.map (S.delete tid) uts)
                             us
                 pure TopicDeleted
 
@@ -148,30 +161,45 @@ instance NoteStore NoteStorePure where
     loadNote :: NoteId -> NoteStorePure (Maybe Note)
     loadNote nid = NoteStorePure $ gets (M.lookup nid . notes)
 
-    storeNote :: UserId -> Note -> NoteStorePure Written
-    storeNote uid note@(Note nid _ _ _ _ _ tid _) = NoteStorePure $
+    storeNote :: UserId -> Note -> NoteStorePure (Written ())
+    storeNote uid note@(Note nid _ _ _ _ _ tid _) = NoteStorePure $ do
+
+        uts <- gets userTopics
 
         gets (M.lookup nid . notes) >>= \case
+
+            _ | not (has uid tid uts) -> pure Forbidden
+
+            Just (Note _ _ _ _ _ _ storedTid _)
+                | not (has uid storedTid uts) -> pure Forbidden
 
             Just storedNote
-                | not (note `isNewerThan` storedNote) -> pure Conflicted
+                | not (note `isNewerThan` storedNote) -> pure (Conflicted ())
 
             _ -> do
-                modify' $ \(Store ns ts uts us) ->
-                    Store (M.insert nid note ns) ts (grant uid tid uts) us
+                modify' $ \(Store ns ts uts' us) ->
+                    Store (M.insert nid note ns) ts uts' us
                 pure Clean
 
-    deleteNote :: NoteId -> VectorClock -> NoteStorePure Written
-    deleteNote nid incoming = NoteStorePure $
+    deleteNote :: UserId -> NoteId -> VectorClock -> NoteStorePure (Written ())
+    deleteNote uid nid incoming = NoteStorePure $ do
+
+        uts <- gets userTopics
 
         gets (M.lookup nid . notes) >>= \case
 
+            Just (Note _ _ _ _ _ _ storedTid _)
+                | not (has uid storedTid uts) -> pure Forbidden
+
             Just (Note _ stored _ _ _ _ _ _)
-                | not (incoming `isNewerThan` stored) -> pure Conflicted
+                | not (incoming `isNewerThan` stored) -> pure (Conflicted ())
 
             _ -> do
-                modify' $ \(Store ns ts uts us) -> Store (M.delete nid ns) ts uts us
+                modify' $ \(Store ns ts uts' us) -> Store (M.delete nid ns) ts uts' us
                 pure Clean
 
 grant :: UserId -> TopicId -> Map UserId (Set TopicId) -> Map UserId (Set TopicId)
 grant uid tid = M.insertWith S.union uid (S.singleton tid)
+
+has :: UserId -> TopicId -> Map UserId (Set TopicId) -> Bool
+has uid tid = maybe False (S.member tid) . M.lookup uid

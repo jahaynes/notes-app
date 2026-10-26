@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 
-module Types ( ColorIndex (..)
+module Types ( Access (..)
+             , ColorIndex (..)
              , Content (..)
              , DeviceId (..)
              , Newer (..)
@@ -142,10 +143,20 @@ newtype TopicDescription
     = TopicDescription Text
         deriving (Eq, Show, ToJSON, FromJSON, ToSchema)
 
-data Written
+-- | The outcome of writing a note or topic. As with 'TopicDeletion', a
+-- conflict carries whatever the caller can show for it.
+data Written a
     = Clean
-    | Conflicted
-        deriving (Eq, Show)
+    | Conflicted !a
+    | Forbidden
+      -- ^ The writer doesn't have the topic it's in, or would be in.
+        deriving (Eq, Show, Functor)
+
+-- | Whether a user may see something, going by the topics they have.
+data Access a
+    = Granted !a
+    | Denied
+        deriving (Eq, Show, Functor)
 
 -- | The outcome of deleting a topic, moving its notes elsewhere.
 -- A conflict carries whatever the caller can show for it: nothing
@@ -154,12 +165,15 @@ data TopicDeletion a
     = TopicDeleted
     | TopicConflicted !a
     | TopicRefused !TopicRefusal
+    | TopicForbidden
+      -- ^ The user doesn't have the topic.
         deriving (Eq, Show, Functor)
 
 -- | Why a topic delete was refused outright, whatever its clock.
 data TopicRefusal
     = NoSuchDestination
-      -- ^ The notes' destination doesn't exist, or is the topic itself.
+      -- ^ The notes' destination doesn't exist, isn't one of the user's
+      -- topics, or is the topic itself.
     | SharedWithNotes
       -- ^ The topic still has notes and more than one user has it.
         deriving (Eq, Show, Generic)

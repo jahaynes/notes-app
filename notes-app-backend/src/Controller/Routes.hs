@@ -55,6 +55,7 @@ type Me =
 type LoadNote =
     JwtAuth
         :> UVerb 'GET '[JSON] '[ WithStatus 200 NoteView
+                               , WithStatus 403 NoBody
                                , WithStatus 404 NoBody
                                ]
 
@@ -83,11 +84,15 @@ type DeleteTopic =
 type DeleteNote =
     JwtAuth :> ReqBody '[JSON] DeleteRequest
         :> UVerb 'DELETE '[JSON] '[ WithStatus 204 NoBody
+                                  , WithStatus 403 NoBody
                                   , WithStatus 409 NoteView
                                   ]
 
 type NotesForTopic =
-    JwtAuth :> Get '[JSON] [NoteView]
+    JwtAuth
+        :> UVerb 'GET '[JSON] '[ WithStatus 200 [NoteView]
+                               , WithStatus 403 NoBody
+                               ]
 
 type TopicsForUser =
     JwtAuth
@@ -99,4 +104,5 @@ type AddTopic =
     JwtAuth
         :> UVerb 'PUT '[JSON] '[ WithStatus 204 NoBody
                                , WithStatus 403 NoBody
+                               , WithStatus 404 NoBody
                                ]

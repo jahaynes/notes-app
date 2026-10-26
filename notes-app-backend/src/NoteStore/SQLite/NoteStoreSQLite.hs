@@ -84,6 +84,37 @@ sqlAddUserTopic = [iii|
     INSERT OR IGNORE INTO UserTopic (user_id, topic_id)
     VALUES (?, ?); |]
 
+userHasTopic :: Connection -> UserId -> TopicId -> IO Bool
+userHasTopic conn uid tid = do
+    [Only has] <- query conn sqlHasTopic (SQLUserId uid, SQLTopicId tid)
+    pure has
+
+    where
+    sqlHasTopic :: Query
+    sqlHasTopic = [iii|
+        SELECT EXISTS (
+            SELECT 1
+            FROM UserTopic
+            WHERE user_id = ? AND topic_id = ?); |]
+
+-- | Whether the note is absent, or in one of the user's topics.
+noteWithinReach :: Connection -> UserId -> NoteId -> IO Bool
+noteWithinReach conn uid nid = do
+    [Only outOfReach] <- query conn sqlNoteOutOfReach (SQLNoteId nid, SQLUserId uid)
+    pure (not outOfReach)
+
+    where
+    sqlNoteOutOfReach :: Query
+    sqlNoteOutOfReach = [iii|
+        SELECT EXISTS (
+            SELECT 1
+            FROM Note
+            WHERE id = ?
+            AND topic_id NOT IN (
+                SELECT topic_id
+                FROM UserTopic
+                WHERE user_id = ?)); |]
+
 toNote :: (SQLNoteId, Text, SQLClock, Text, Int, Bool, SQLTopicId, UTCTime) -> Note
 toNote (SQLNoteId nid, value, SQLClock clock, title, colorIndex, showFull, SQLTopicId topicId, updatedAt) =
     Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
@@ -183,6 +214,11 @@ instance UserStore NoteStoreSQLite where
 
 instance NoteStore NoteStoreSQLite where
 
+    hasTopic :: UserId -> TopicId -> NoteStoreSQLite Bool
+    hasTopic uid tid = NoteStoreSQLite $ do
+        conn <- ask
+        liftIO $ userHasTopic conn uid tid
+
     topicsForUser :: UserId -> NoteStoreSQLite (Vector TopicId)
     topicsForUser uid = NoteStoreSQLite $ do
         conn <- ask
@@ -233,20 +269,32 @@ instance NoteStore NoteStoreSQLite where
             FROM Topic
             WHERE id = ?; |]
 
-    storeTopic :: UserId -> Topic -> NoteStoreSQLite Written
+    storeTopic :: UserId -> Topic -> NoteStoreSQLite (Written ())
     storeTopic uid (Topic tid clock (TopicName name) mDescription updatedAt) = NoteStoreSQLite $ do
         conn <- ask
         liftIO . withTransaction conn $ do
-            execute conn sqlStoreTopic ( SQLTopicId tid, SQLClock clock, name
-                                       , (\(TopicDescription d) -> d) <$> mDescription
-                                       , updatedAt )
-            changes conn >>= \case
-                0 -> pure Conflicted
-                _ -> do
-                    execute conn sqlAddUserTopic (SQLUserId uid, SQLTopicId tid)
-                    pure Clean
+            [Only unclaimed] <- query conn sqlUnclaimed (SQLTopicId tid, SQLTopicId tid, SQLTopicId tid)
+            allowed <- (unclaimed ||) <$> userHasTopic conn uid tid
+            if not allowed
+                then pure Forbidden
+                else do
+                    execute conn sqlStoreTopic ( SQLTopicId tid, SQLClock clock, name
+                                               , (\(TopicDescription d) -> d) <$> mDescription
+                                               , updatedAt )
+                    changes conn >>= \case
+                        0 -> pure (Conflicted ())
+                        _ -> do
+                            execute conn sqlAddUserTopic (SQLUserId uid, SQLTopicId tid)
+                            pure Clean
 
         where
+        -- Nobody has the topic, and nothing is stored under it.
+        sqlUnclaimed :: Query
+        sqlUnclaimed = [iii|
+            SELECT NOT EXISTS (SELECT 1 FROM UserTopic WHERE topic_id = ?)
+               AND NOT EXISTS (SELECT 1 FROM Topic WHERE id = ?)
+               AND NOT EXISTS (SELECT 1 FROM Note WHERE topic_id = ?); |]
+
         sqlStoreTopic :: Query
         sqlStoreTopic = [iii|
             INSERT INTO Topic (id, clock, name, description, updated_at)
@@ -274,11 +322,14 @@ instance NoteStore NoteStoreSQLite where
         conn <- ask
         liftIO . withTransaction conn $ do
 
+            hasTid     <- userHasTopic conn uid tid
+            hasDest    <- userHasTopic conn uid dest
             destExists <- not . null <$> (query conn sqlTopicExists (Only (SQLTopicId dest)) :: IO [Only Int])
             [Only sharedWithNotes] <- query conn sqlSharedWithNotes (SQLTopicId tid, SQLTopicId tid)
 
-            if | dest == tid || not destExists -> pure (TopicRefused NoSuchDestination)
-               | sharedWithNotes               -> pure (TopicRefused SharedWithNotes)
+            if | not hasTid                                   -> pure TopicForbidden
+               | dest == tid || not destExists || not hasDest -> pure (TopicRefused NoSuchDestination)
+               | sharedWithNotes                              -> pure (TopicRefused SharedWithNotes)
                | otherwise -> do
                     execute conn sqlDeleteTopic (SQLTopicId tid, SQLClock clock)
                     changes conn >>= \case
@@ -294,7 +345,6 @@ instance NoteStore NoteStoreSQLite where
                        execute conn sqlMoveNote (SQLTopicId dest, SQLClock (tick ud vc), updatedAt, nid))
                   moved
             execute conn sqlRevokeTopic (Only (SQLTopicId tid))
-            execute conn sqlAddUserTopic (SQLUserId uid, SQLTopicId dest)
             pure TopicDeleted
 
         sqlTopicExists :: Query
@@ -370,18 +420,20 @@ instance NoteStore NoteStoreSQLite where
             FROM Note
             WHERE id = ?; |]
 
-    storeNote :: UserId -> Note -> NoteStoreSQLite Written
+    storeNote :: UserId -> Note -> NoteStoreSQLite (Written ())
     storeNote uid (Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
                         showFull topicId updatedAt) = NoteStoreSQLite $ do
         conn <- ask
         liftIO . withTransaction conn $ do
-            execute conn sqlStoreNote ( SQLNoteId nid, value, SQLClock clock
-                                      , title, colorIndex, showFull, SQLTopicId topicId, updatedAt )
-            changes conn >>= \case
-                0 -> pure Conflicted
-                _ -> do
-                    execute conn sqlAddUserTopic (SQLUserId uid, SQLTopicId topicId)
-                    pure Clean
+            allowed <- (&&) <$> userHasTopic conn uid topicId <*> noteWithinReach conn uid nid
+            if not allowed
+                then pure Forbidden
+                else do
+                    execute conn sqlStoreNote ( SQLNoteId nid, value, SQLClock clock
+                                              , title, colorIndex, showFull, SQLTopicId topicId, updatedAt )
+                    changes conn >>= \case
+                        0 -> pure (Conflicted ())
+                        _ -> pure Clean
 
         where
         sqlStoreNote :: Query
@@ -408,16 +460,19 @@ instance NoteStore NoteStoreSQLite where
                     )
             ); |]
 
-    deleteNote :: NoteId -> VectorClock -> NoteStoreSQLite Written
-    deleteNote nid clock = NoteStoreSQLite $ do
+    deleteNote :: UserId -> NoteId -> VectorClock -> NoteStoreSQLite (Written ())
+    deleteNote uid nid clock = NoteStoreSQLite $ do
         conn <- ask
-        liftIO . withTransaction conn $ do
-            execute conn sqlDeleteNote (SQLNoteId nid, SQLClock clock)
-            changes conn >>= \case
-                0 -> query conn sqlNoteExists (Only (SQLNoteId nid)) >>= \case
-                         []                -> pure Clean
-                         (_ :: [Only Int]) -> pure Conflicted
-                _ -> pure Clean
+        liftIO . withTransaction conn $
+            noteWithinReach conn uid nid >>= \case
+                False -> pure Forbidden
+                True  -> do
+                    execute conn sqlDeleteNote (SQLNoteId nid, SQLClock clock)
+                    changes conn >>= \case
+                        0 -> query conn sqlNoteExists (Only (SQLNoteId nid)) >>= \case
+                                 []                -> pure Clean
+                                 (_ :: [Only Int]) -> pure (Conflicted ())
+                        _ -> pure Clean
 
         where
         sqlDeleteNote :: Query

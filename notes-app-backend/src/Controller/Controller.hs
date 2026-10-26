@@ -95,12 +95,13 @@ storeServer = userServer :<|> topicServer :<|> noteServer
             | otherwise =
                 topicsFor uid >>= respond . WithStatus @200 . map toTopicView . V.toList
 
-        addTopicHandler :: NoteStore m => UserId -> TopicId -> ServerT AddTopic m
-        addTopicHandler uid tid authUid
-            | uid /= authUid =
-                respond (WithStatus @403 NoBody)
-            | otherwise =
-                addTopic uid tid >> respond (WithStatus @204 NoBody)
+        -- Gives the user in the path a topic the token's user has.
+        addTopicHandler :: (NoteStore m, UserStore m) => UserId -> TopicId -> ServerT AddTopic m
+        addTopicHandler uid tid authUid =
+            shareTopic authUid uid tid >>= \case
+                Granted (Just ()) -> respond (WithStatus @204 NoBody)
+                Granted Nothing   -> respond (WithStatus @404 NoBody)
+                Denied            -> respond (WithStatus @403 NoBody)
 
     topicServer :: (NoteStore m, Log m, Clock m) => ServerT TopicAPI m
     topicServer = (\tid -> storeTopicHandler tid :<|> deleteTopicHandler tid)
@@ -116,6 +117,7 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                     TopicDeleted          -> respond (WithStatus @204 NoBody)
                     TopicConflicted topic -> respond (WithStatus @409 (toTopicView topic))
                     TopicRefused refusal  -> respond (WithStatus @422 refusal)
+                    TopicForbidden        -> respond (WithStatus @403 NoBody)
 
         storeTopicHandler :: (NoteStore m, Log m, Clock m) => TopicId -> ServerT StoreTopic m
         storeTopicHandler tid authUid (StoreTopicRequest uid did mVc n d)
@@ -123,21 +125,26 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                 respond (WithStatus @403 NoBody)
             | otherwise =
                 storeTopicFor uid did tid mVc n d >>= \case
-                    Nothing    -> respond (WithStatus @204 NoBody)
-                    Just topic -> respond (WithStatus @409 (toTopicView topic))
+                    Clean            -> respond (WithStatus @204 NoBody)
+                    Conflicted topic -> respond (WithStatus @409 (toTopicView topic))
+                    Forbidden        -> respond (WithStatus @403 NoBody)
 
         notesForTopicHandler :: NoteStore m => TopicId -> ServerT NotesForTopic m
-        notesForTopicHandler tid _ = map toView . V.toList <$> notesFor tid
+        notesForTopicHandler tid authUid =
+            notesFor authUid tid >>= \case
+                Granted notes -> respond (WithStatus @200 (map toView (V.toList notes)))
+                Denied        -> respond (WithStatus @403 NoBody)
 
     noteServer :: (NoteStore m, Log m, Clock m) => ServerT NoteAPI m
     noteServer = \nid -> loadHandler nid :<|> storeHandler nid :<|> deleteHandler nid
 
         where
         loadHandler :: NoteStore m => NoteId -> ServerT LoadNote m
-        loadHandler nid _ =
-            load nid >>= \case
-                Just note -> respond (WithStatus @200 (toView note))
-                Nothing   -> respond (WithStatus @404 NoBody)
+        loadHandler nid authUid =
+            load authUid nid >>= \case
+                Granted (Just note) -> respond (WithStatus @200 (toView note))
+                Granted Nothing     -> respond (WithStatus @404 NoBody)
+                Denied              -> respond (WithStatus @403 NoBody)
 
         storeHandler :: (NoteStore m, Log m, Clock m) => NoteId -> ServerT StoreNote m
         storeHandler nid authUid (StoreRequest uid did mVc t c ci sf tid)
@@ -145,14 +152,16 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                 respond (WithStatus @403 NoBody)
             | otherwise =
                 store uid did nid mVc t c ci sf tid >>= \case
-                    Nothing   -> respond (WithStatus @204 NoBody)
-                    Just note -> respond (WithStatus @409 (toView note))
+                    Clean           -> respond (WithStatus @204 NoBody)
+                    Conflicted note -> respond (WithStatus @409 (toView note))
+                    Forbidden       -> respond (WithStatus @403 NoBody)
 
         deleteHandler :: (NoteStore m, Log m) => NoteId -> ServerT DeleteNote m
-        deleteHandler nid _ (DeleteRequest vc) =
-            delete nid vc >>= \case
-                Nothing   -> respond (WithStatus @204 NoBody)
-                Just note -> respond (WithStatus @409 (toView note))
+        deleteHandler nid authUid (DeleteRequest vc) =
+            delete authUid nid vc >>= \case
+                Clean           -> respond (WithStatus @204 NoBody)
+                Conflicted note -> respond (WithStatus @409 (toView note))
+                Forbidden       -> respond (WithStatus @403 NoBody)
 
 -- | Browser origins allowed to call the API, comma-separated in
 -- CORS_ORIGINS, or the local development ones when it isn't set.
