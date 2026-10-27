@@ -39,10 +39,10 @@ app key origins runStore =
         serveWithContext (Proxy @ApiWithSwagger) (authHandler key :. EmptyContext) $
                  swaggerSchemaUIServer' (pure (OrderedSpec (toJSON notesOpenApi)))
             :<|> loginHandler key runStore
-            :<|> hoistServerWithContext (Proxy @StoreAPI) (Proxy @'[AuthHandler Request UserId])
+            :<|> hoistServerWithContext (Proxy @StoreAPI) (Proxy @'[AuthHandler Request (Authed UserId)])
                                         (liftIO . runStore) storeServer
 
-authHandler :: SigningKey -> AuthHandler Request UserId
+authHandler :: SigningKey -> AuthHandler Request (Authed UserId)
 authHandler key = mkAuthHandler $ \req ->
     case bearerToken =<< lookup "Authorization" (requestHeaders req) of
         Nothing    -> throwError unauthorized
@@ -52,7 +52,9 @@ authHandler key = mkAuthHandler $ \req ->
     where
     bearerToken header = do
         (scheme, token) <- T.breakOn " " <$> either (const Nothing) Just (TE.decodeUtf8' header)
-        if T.toLower scheme == "bearer" then Just (T.strip token) else Nothing
+        if T.toLower scheme == "bearer"
+            then Just (T.strip token)
+            else Nothing
 
     unauthorized = err401 { errHeaders = [("WWW-Authenticate", "Bearer")] }
 
@@ -75,9 +77,9 @@ storeServer = userServer :<|> topicServer :<|> noteServer
     userServer = meHandler :<|> createUserHandler :<|> topicsForUserHandler :<|> addTopicHandler
 
         where
-        meHandler :: UserStore m => UserId -> ServerT Me m
-        meHandler uid =
-            loadUser uid >>= \case
+        meHandler :: UserStore m => Authed UserId -> ServerT Me m
+        meHandler authUid =
+            loadUser (getAuthed authUid) >>= \case
                 Just user -> respond (WithStatus @200 (toUserView user))
                 Nothing   -> respond (WithStatus @404 NoBody)
 
@@ -90,10 +92,10 @@ storeServer = userServer :<|> topicServer :<|> noteServer
 
         topicsForUserHandler :: NoteStore m => UserId -> ServerT TopicsForUser m
         topicsForUserHandler uid authUid
-            | uid /= authUid =
+            | uid /= getAuthed authUid =
                 respond (WithStatus @403 NoBody)
             | otherwise =
-                topicsFor uid >>= respond . WithStatus @200 . map toTopicView . V.toList
+                topicsFor authUid >>= respond . WithStatus @200 . map toTopicView . V.toList
 
         -- Gives the user in the path a topic the token's user has.
         addTopicHandler :: (NoteStore m, UserStore m) => UserId -> TopicId -> ServerT AddTopic m
@@ -110,10 +112,10 @@ storeServer = userServer :<|> topicServer :<|> noteServer
         where
         deleteTopicHandler :: (NoteStore m, Log m, Clock m) => TopicId -> ServerT DeleteTopic m
         deleteTopicHandler tid authUid (DeleteTopicRequest uid did vc dest)
-            | uid /= authUid =
+            | uid /= getAuthed authUid =
                 respond (WithStatus @403 NoBody)
             | otherwise =
-                deleteTopicFor uid did tid vc dest >>= \case
+                deleteTopicFor authUid did tid vc dest >>= \case
                     TopicDeleted          -> respond (WithStatus @204 NoBody)
                     TopicConflicted topic -> respond (WithStatus @409 (toTopicView topic))
                     TopicRefused refusal  -> respond (WithStatus @422 refusal)
@@ -121,10 +123,10 @@ storeServer = userServer :<|> topicServer :<|> noteServer
 
         storeTopicHandler :: (NoteStore m, Log m, Clock m) => TopicId -> ServerT StoreTopic m
         storeTopicHandler tid authUid (StoreTopicRequest uid did mVc n d)
-            | uid /= authUid =
+            | uid /= getAuthed authUid =
                 respond (WithStatus @403 NoBody)
             | otherwise =
-                storeTopicFor uid did tid mVc n d >>= \case
+                storeTopicFor authUid did tid mVc n d >>= \case
                     Clean            -> respond (WithStatus @204 NoBody)
                     Conflicted topic -> respond (WithStatus @409 (toTopicView topic))
                     Forbidden        -> respond (WithStatus @403 NoBody)
@@ -148,10 +150,10 @@ storeServer = userServer :<|> topicServer :<|> noteServer
 
         storeHandler :: (NoteStore m, Log m, Clock m) => NoteId -> ServerT StoreNote m
         storeHandler nid authUid (StoreRequest uid did mVc t c ci sf tid)
-            | uid /= authUid =
+            | uid /= getAuthed authUid =
                 respond (WithStatus @403 NoBody)
             | otherwise =
-                store uid did nid mVc t c ci sf tid >>= \case
+                store authUid did nid mVc t c ci sf tid >>= \case
                     Clean           -> respond (WithStatus @204 NoBody)
                     Conflicted note -> respond (WithStatus @409 (toView note))
                     Forbidden       -> respond (WithStatus @403 NoBody)

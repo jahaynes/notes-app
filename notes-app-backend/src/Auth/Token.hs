@@ -1,4 +1,6 @@
-module Auth.Token ( SigningKey
+module Auth.Token ( Authed
+                  , SigningKey
+                  , getAuthed
                   , issueToken
                   , loadSigningKey
                   , signingKey
@@ -22,6 +24,13 @@ import           Data.Time.Clock.POSIX  (posixSecondsToUTCTime, utcTimeToPOSIXSe
 import qualified Data.UUID              as UUID
 import           System.Environment     (lookupEnv)
 import           System.IO              (hPutStrLn, stderr)
+
+newtype Authed a
+    = Authed a -- Do not export constructor
+        deriving (Eq, Show)
+
+getAuthed :: Authed a -> a
+getAuthed (Authed x) = x
 
 newtype SigningKey
     = SigningKey JWK
@@ -52,7 +61,7 @@ tokenLifetime = 24 * 60 * 60
 audience :: StringOrURI
 audience = "notes-app"
 
-issueToken :: SigningKey -> UTCTime -> UserId -> IO (Either JWTError Text)
+issueToken :: MonadRandom m => SigningKey -> UTCTime -> UserId -> m (Either JWTError Text)
 issueToken (SigningKey key) now' (UserId uid) = runJOSE $
     TE.decodeUtf8 . BL.toStrict . encodeCompact
         <$> signClaims key (newJWSHeaderProtected HS256) claims
@@ -65,11 +74,11 @@ issueToken (SigningKey key) now' (UserId uid) = runJOSE $
 
     issuedAt = posixSecondsToUTCTime (fromInteger (floor (utcTimeToPOSIXSeconds now')))
 
-verifyToken :: SigningKey -> UTCTime -> Text -> Either JWTError UserId
+verifyToken :: SigningKey -> UTCTime -> Text -> Either JWTError (Authed UserId)
 verifyToken (SigningKey key) at token = do
     jwt    <- decodeCompact (BL.fromStrict (TE.encodeUtf8 token))
     claims <- verifyClaimsAt settings key at (jwt :: SignedJWT)
-    maybe (Left (JWTClaimsSetDecodeError "sub is not a user id")) (Right . UserId) $
+    maybe (Left (JWTClaimsSetDecodeError "sub is not a user id")) (Right . Authed . UserId) $
         UUID.fromText =<< preview string =<< view claimSub claims
     where
     settings = defaultJWTValidationSettings (== audience)
