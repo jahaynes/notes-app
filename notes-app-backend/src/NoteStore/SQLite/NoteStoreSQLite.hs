@@ -6,6 +6,7 @@ module NoteStore.SQLite.NoteStoreSQLite
     ) where
 
 import Auth.Password                (saltLength)
+import Auth.Token                   (Authed, getAuthed)
 import NoteStore.Class
 import NoteStore.SQLite.SQLiteTypes
 import Types
@@ -84,8 +85,9 @@ sqlAddUserTopic = [iii|
     INSERT OR IGNORE INTO UserTopic (user_id, topic_id)
     VALUES (?, ?); |]
 
-userHasTopic :: Connection -> UserId -> TopicId -> IO Bool
-userHasTopic conn uid tid = do
+userHasTopic :: Connection -> Authed UserId -> TopicId -> IO Bool
+userHasTopic conn aUid tid = do
+    let uid = getAuthed aUid
     [Only has] <- query conn sqlHasTopic (SQLUserId uid, SQLTopicId tid)
     pure has
 
@@ -214,13 +216,14 @@ instance UserStore NoteStoreSQLite where
 
 instance NoteStore NoteStoreSQLite where
 
-    hasTopic :: UserId -> TopicId -> NoteStoreSQLite Bool
+    hasTopic :: Authed UserId -> TopicId -> NoteStoreSQLite Bool
     hasTopic uid tid = NoteStoreSQLite $ do
         conn <- ask
         liftIO $ userHasTopic conn uid tid
 
-    topicsForUser :: UserId -> NoteStoreSQLite (Vector TopicId)
-    topicsForUser uid = NoteStoreSQLite $ do
+    topicsForUser :: Authed UserId -> NoteStoreSQLite (Vector TopicId)
+    topicsForUser aUid = NoteStoreSQLite $ do
+        let uid = getAuthed aUid
         conn <- ask
         liftIO $
             V.fromList . map (\(Only (SQLTopicId tid)) -> tid)
@@ -234,8 +237,9 @@ instance NoteStore NoteStoreSQLite where
             WHERE user_id = ?
             ORDER BY topic_id; |]
 
-    loadTopicsForUser :: UserId -> NoteStoreSQLite (Vector Topic)
-    loadTopicsForUser uid = NoteStoreSQLite $ do
+    loadTopicsForUser :: Authed UserId -> NoteStoreSQLite (Vector Topic)
+    loadTopicsForUser aUid = NoteStoreSQLite $ do
+        let uid = getAuthed aUid
         conn <- ask
         liftIO $
             V.fromList . map toTopic
@@ -269,7 +273,7 @@ instance NoteStore NoteStoreSQLite where
             FROM Topic
             WHERE id = ?; |]
 
-    storeTopic :: UserId -> Topic -> NoteStoreSQLite (Written ())
+    storeTopic :: Authed UserId -> Topic -> NoteStoreSQLite (Written ())
     storeTopic uid (Topic tid clock (TopicName name) mDescription updatedAt) = NoteStoreSQLite $ do
         conn <- ask
         liftIO . withTransaction conn $ do
@@ -284,7 +288,7 @@ instance NoteStore NoteStoreSQLite where
                     changes conn >>= \case
                         0 -> pure (Conflicted ())
                         _ -> do
-                            execute conn sqlAddUserTopic (SQLUserId uid, SQLTopicId tid)
+                            execute conn sqlAddUserTopic (SQLUserId (getAuthed uid), SQLTopicId tid)
                             pure Clean
 
         where
@@ -316,9 +320,9 @@ instance NoteStore NoteStoreSQLite where
                     )
             ); |]
 
-    deleteTopic :: UserDevice -> UTCTime -> TopicId -> VectorClock -> TopicId
+    deleteTopic :: Authed UserId -> DeviceId -> UTCTime -> TopicId -> VectorClock -> TopicId
                 -> NoteStoreSQLite (TopicDeletion ())
-    deleteTopic ud@(UserDevice uid _) updatedAt tid clock dest = NoteStoreSQLite $ do
+    deleteTopic uid did updatedAt tid clock dest = NoteStoreSQLite $ do
         conn <- ask
         liftIO . withTransaction conn $ do
 
@@ -342,7 +346,7 @@ instance NoteStore NoteStoreSQLite where
         moveNotes conn = do
             moved <- query conn sqlNoteClocksInTopic (Only (SQLTopicId tid))
             mapM_ (\(nid :: SQLNoteId, SQLClock vc) ->
-                       execute conn sqlMoveNote (SQLTopicId dest, SQLClock (tick ud vc), updatedAt, nid))
+                       execute conn sqlMoveNote (SQLTopicId dest, SQLClock (tick (UserDevice (getAuthed uid) did) vc), updatedAt, nid))
                   moved
             execute conn sqlRevokeTopic (Only (SQLTopicId tid))
             pure TopicDeleted
@@ -420,12 +424,12 @@ instance NoteStore NoteStoreSQLite where
             FROM Note
             WHERE id = ?; |]
 
-    storeNote :: UserId -> Note -> NoteStoreSQLite (Written ())
+    storeNote :: Authed UserId -> Note -> NoteStoreSQLite (Written ())
     storeNote uid (Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
                         showFull topicId updatedAt) = NoteStoreSQLite $ do
         conn <- ask
         liftIO . withTransaction conn $ do
-            allowed <- (&&) <$> userHasTopic conn uid topicId <*> noteWithinReach conn uid nid
+            allowed <- (&&) <$> userHasTopic conn uid topicId <*> noteWithinReach conn (getAuthed uid) nid
             if not allowed
                 then pure Forbidden
                 else do
@@ -460,11 +464,11 @@ instance NoteStore NoteStoreSQLite where
                     )
             ); |]
 
-    deleteNote :: UserId -> NoteId -> VectorClock -> NoteStoreSQLite (Written ())
+    deleteNote :: Authed UserId -> NoteId -> VectorClock -> NoteStoreSQLite (Written ())
     deleteNote uid nid clock = NoteStoreSQLite $ do
         conn <- ask
         liftIO . withTransaction conn $
-            noteWithinReach conn uid nid >>= \case
+            noteWithinReach conn (getAuthed uid) nid >>= \case
                 False -> pure Forbidden
                 True  -> do
                     execute conn sqlDeleteNote (SQLNoteId nid, SQLClock clock)

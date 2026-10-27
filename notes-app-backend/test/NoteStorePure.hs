@@ -12,6 +12,7 @@ import qualified Data.UUID       as UUID
 import           Data.Vector (Vector)
 import qualified Data.Vector     as V
 
+import Auth.Token (Authed, getAuthed)
 import NoteStore.Class
 import Types
 
@@ -80,16 +81,16 @@ instance Log NoteStorePure where
 
 instance NoteStore NoteStorePure where
 
-    hasTopic :: UserId -> TopicId -> NoteStorePure Bool
-    hasTopic uid tid = NoteStorePure $ gets (has uid tid . userTopics)
+    hasTopic :: Authed UserId -> TopicId -> NoteStorePure Bool
+    hasTopic uid tid = NoteStorePure $ gets (has (getAuthed uid) tid . userTopics)
 
-    topicsForUser :: UserId -> NoteStorePure (Vector TopicId)
+    topicsForUser :: Authed UserId -> NoteStorePure (Vector TopicId)
     topicsForUser uid = NoteStorePure $
-        gets (V.fromList . maybe [] S.toAscList . M.lookup uid . userTopics)
+        gets (V.fromList . maybe [] S.toAscList . M.lookup (getAuthed uid) . userTopics)
 
-    loadTopicsForUser :: UserId -> NoteStorePure (Vector Topic)
+    loadTopicsForUser :: Authed UserId -> NoteStorePure (Vector Topic)
     loadTopicsForUser uid = NoteStorePure $ do
-        tids <- gets (maybe [] S.toAscList . M.lookup uid . userTopics)
+        tids <- gets (maybe [] S.toAscList . M.lookup (getAuthed uid) . userTopics)
         ts   <- gets topics
         pure (V.fromList (mapMaybe (`M.lookup` ts) tids))
 
@@ -100,12 +101,13 @@ instance NoteStore NoteStorePure where
     loadTopic :: TopicId -> NoteStorePure (Maybe Topic)
     loadTopic tid = NoteStorePure $ gets (M.lookup tid . topics)
 
-    storeTopic :: UserId -> Topic -> NoteStorePure (Written ())
-    storeTopic uid topic@(Topic tid _ _ _ _) = NoteStorePure $ do
+    storeTopic :: Authed UserId -> Topic -> NoteStorePure (Written ())
+    storeTopic aUid topic@(Topic tid _ _ _ _) = NoteStorePure $ do
 
         Store ns ts uts us <- get
 
-        let unclaimed = not (any (S.member tid) uts)
+        let uid       = getAuthed aUid
+            unclaimed = not (any (S.member tid) uts)
                      && M.notMember tid ts
                      && not (any (\(Note _ _ _ _ _ _ ntid _) -> ntid == tid) ns)
 
@@ -120,9 +122,9 @@ instance NoteStore NoteStorePure where
                 put (Store ns (M.insert tid topic ts) (grant uid tid uts) us)
                 pure Clean
 
-    deleteTopic :: UserDevice -> UTCTime -> TopicId -> VectorClock -> TopicId
+    deleteTopic :: Authed UserId -> DeviceId -> UTCTime -> TopicId -> VectorClock -> TopicId
                 -> NoteStorePure (TopicDeletion ())
-    deleteTopic ud@(UserDevice uid _) updatedAt tid incoming dest = NoteStorePure $ do
+    deleteTopic aUid did updatedAt tid incoming dest = NoteStorePure $ do
 
         Store ns ts uts us <- get
 
@@ -149,6 +151,9 @@ instance NoteStore NoteStorePure where
                 pure TopicDeleted
 
         where
+        uid = getAuthed aUid
+        ud  = UserDevice uid did
+
         move n@(Note nid vc t c ci sf ntid _)
             | ntid == tid = Note nid (tick ud vc) t c ci sf dest updatedAt
             | otherwise   = n
@@ -161,10 +166,12 @@ instance NoteStore NoteStorePure where
     loadNote :: NoteId -> NoteStorePure (Maybe Note)
     loadNote nid = NoteStorePure $ gets (M.lookup nid . notes)
 
-    storeNote :: UserId -> Note -> NoteStorePure (Written ())
-    storeNote uid note@(Note nid _ _ _ _ _ tid _) = NoteStorePure $ do
+    storeNote :: Authed UserId -> Note -> NoteStorePure (Written ())
+    storeNote aUid note@(Note nid _ _ _ _ _ tid _) = NoteStorePure $ do
 
         uts <- gets userTopics
+
+        let uid = getAuthed aUid
 
         gets (M.lookup nid . notes) >>= \case
 
@@ -181,10 +188,12 @@ instance NoteStore NoteStorePure where
                     Store (M.insert nid note ns) ts uts' us
                 pure Clean
 
-    deleteNote :: UserId -> NoteId -> VectorClock -> NoteStorePure (Written ())
-    deleteNote uid nid incoming = NoteStorePure $ do
+    deleteNote :: Authed UserId -> NoteId -> VectorClock -> NoteStorePure (Written ())
+    deleteNote aUid nid incoming = NoteStorePure $ do
 
         uts <- gets userTopics
+
+        let uid = getAuthed aUid
 
         gets (M.lookup nid . notes) >>= \case
 

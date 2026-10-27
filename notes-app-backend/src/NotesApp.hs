@@ -11,6 +11,7 @@ module NotesApp ( authenticate
                 ) where
 
 import Auth.Password (hashPassword, verifyPassword)
+import Auth.Token    (Authed, getAuthed)
 import Types
 
 import           Data.Maybe           (fromMaybe)
@@ -21,7 +22,7 @@ import           Data.Vector          (Vector)
 
 -- | The note, if there is one and it's in one of the user's topics.
 load :: NoteStore m
-     => UserId -> NoteId -> m (Access (Maybe Note))
+     => Authed UserId -> NoteId -> m (Access (Maybe Note))
 load userId noteId =
 
     loadNote noteId >>= \case
@@ -35,7 +36,7 @@ load userId noteId =
             pure (Granted Nothing)
 
 notesFor :: NoteStore m
-         => UserId -> TopicId -> m (Access (Vector Note))
+         => Authed UserId -> TopicId -> m (Access (Vector Note))
 notesFor userId topicId =
 
     hasTopic userId topicId >>= \case
@@ -43,13 +44,13 @@ notesFor userId topicId =
         False -> pure Denied
 
 topicsFor :: NoteStore m
-          => UserId -> m (Vector Topic)
+          => Authed UserId -> m (Vector Topic)
 topicsFor = loadTopicsForUser
 
 -- | Gives the grantee a topic the sharer has. Nothing if there's no such
 -- grantee.
 shareTopic :: (NoteStore m, UserStore m)
-           => UserId -> UserId -> TopicId -> m (Access (Maybe ()))
+           => Authed UserId -> UserId -> TopicId -> m (Access (Maybe ()))
 shareTopic sharerId granteeId topicId =
 
     hasTopic sharerId topicId >>= \case
@@ -63,17 +64,18 @@ shareTopic sharerId granteeId topicId =
                 Just _  -> Granted . Just <$> addTopicForUser granteeId topicId
 
 store :: (NoteStore m, Log m, Clock m)
-      => UserId -> DeviceId -> NoteId -> Maybe VectorClock
+      => Authed UserId -> DeviceId -> NoteId -> Maybe VectorClock
       -> Title -> Content -> ColorIndex -> Bool -> TopicId
       -> m (Written Note)
-store userId deviceId noteId mVc title content colorIndex showFull topicId = do
+store aUserId deviceId noteId mVc title content colorIndex showFull topicId = do
 
-    let userDevice  = UserDevice userId deviceId
+    let userId      = getAuthed aUserId
+        userDevice  = UserDevice userId deviceId
         vectorClock = fromMaybe (VectorClock (M.singleton userDevice 0)) mVc
 
     updatedAt <- now
 
-    storeNote userId (Note noteId vectorClock title content colorIndex showFull topicId updatedAt) >>= \case
+    storeNote aUserId (Note noteId vectorClock title content colorIndex showFull topicId updatedAt) >>= \case
 
         Clean -> do
             lPutStrLn "Note created"
@@ -86,7 +88,7 @@ store userId deviceId noteId mVc title content colorIndex showFull topicId = do
             pure Forbidden
 
 delete :: (NoteStore m, Log m)
-       => UserId -> NoteId -> VectorClock -> m (Written Note)
+       => Authed UserId -> NoteId -> VectorClock -> m (Written Note)
 delete userId noteId vectorClock =
 
     deleteNote userId noteId vectorClock >>= \case
@@ -103,17 +105,18 @@ delete userId noteId vectorClock =
 
 
 storeTopicFor :: (NoteStore m, Log m, Clock m)
-              => UserId -> DeviceId -> TopicId -> Maybe VectorClock
+              => Authed UserId -> DeviceId -> TopicId -> Maybe VectorClock
               -> TopicName -> Maybe TopicDescription
               -> m (Written Topic)
-storeTopicFor userId deviceId topicId mVc name mDescription = do
+storeTopicFor aUserId deviceId topicId mVc name mDescription = do
 
-    let userDevice  = UserDevice userId deviceId
+    let userId      = getAuthed aUserId
+        userDevice  = UserDevice userId deviceId
         vectorClock = fromMaybe (VectorClock (M.singleton userDevice 0)) mVc
 
     updatedAt <- now
 
-    storeTopic userId (Topic topicId vectorClock name mDescription updatedAt) >>= \case
+    storeTopic aUserId (Topic topicId vectorClock name mDescription updatedAt) >>= \case
 
         Clean -> do
             lPutStrLn "Topic created"
@@ -126,13 +129,13 @@ storeTopicFor userId deviceId topicId mVc name mDescription = do
             pure Forbidden
 
 deleteTopicFor :: (NoteStore m, Log m, Clock m)
-               => UserId -> DeviceId -> TopicId -> VectorClock -> TopicId
+               => Authed UserId -> DeviceId -> TopicId -> VectorClock -> TopicId
                -> m (TopicDeletion Topic)
 deleteTopicFor userId deviceId topicId vectorClock destination = do
 
     updatedAt <- now
 
-    deleteTopic (UserDevice userId deviceId) updatedAt topicId vectorClock destination >>= \case
+    deleteTopic userId deviceId updatedAt topicId vectorClock destination >>= \case
 
         TopicDeleted -> do
             lPutStrLn "Topic deleted"

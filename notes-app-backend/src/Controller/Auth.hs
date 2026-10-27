@@ -8,6 +8,7 @@ module Controller.Auth ( Jwt
                        , JwtAuth
                        ) where
 
+import Auth.Token (Authed)
 import Types
 
 import           Control.Lens                     ((&), (.~), (<>~), (?~), at)
@@ -26,7 +27,7 @@ data Jwt
 
 type JwtAuth = AuthProtect Jwt
 
-type instance AuthServerData JwtAuth = UserId
+type instance AuthServerData JwtAuth = Authed UserId
 
 instance HasOpenApi api => HasOpenApi (AuthProtect Jwt :> api) where
     toOpenApi _ =
