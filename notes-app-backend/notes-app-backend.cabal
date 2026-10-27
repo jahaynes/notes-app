@@ -56,6 +56,9 @@ library
                       NotesApp
                       NoteStore.Class
                       NoteStore.SQLite.NoteStoreSQLite
+                      NoteStore.SQLite.StoreSQLite
+                      NoteStore.SQLite.TopicStoreSQLite
+                      NoteStore.SQLite.UserStoreSQLite
                       NoteStore.SQLite.SQLiteTypes 
                       Types
     hs-source-dirs:   src

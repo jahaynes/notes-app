@@ -2,7 +2,7 @@ module Main (main) where
 
 import Auth.Token                       (loadSigningKey)
 import Controller.Controller            (app, loadCorsOrigins)
-import NoteStore.SQLite.NoteStoreSQLite (runNoteStoreSQLite)
+import NoteStore.SQLite.StoreSQLite     (runStoreSQLite)
 
 import Data.Function            ((&))
 import Data.Maybe               (fromMaybe)
@@ -20,7 +20,7 @@ main = do
         Nothing -> pure 8081
         Just p  -> maybe (fail ("PORT is not a number: " ++ p)) pure (readMaybe p)
     putStrLn ("Serving on http://" ++ host ++ ":" ++ show port ++ " (swagger at /swagger-ui)")
-    runSettings (settings host port) (app key origins (runNoteStoreSQLite "notes.db"))
+    runSettings (settings host port) (app key origins (runStoreSQLite "notes.db"))
   where
     settings host port = defaultSettings
         & setHost (fromString host)

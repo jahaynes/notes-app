@@ -79,7 +79,7 @@ instance Log NoteStorePure where
     lPutStrLn _ = pure ()
     lPrint _    = pure ()
 
-instance NoteStore NoteStorePure where
+instance TopicStore NoteStorePure where
 
     hasTopic :: Authed UserId -> TopicId -> NoteStorePure Bool
     hasTopic uid tid = NoteStorePure $ gets (has (getAuthed uid) tid . userTopics)
@@ -157,6 +157,8 @@ instance NoteStore NoteStorePure where
         move n@(Note nid vc t c ci sf ntid _)
             | ntid == tid = Note nid (tick ud vc) t c ci sf dest updatedAt
             | otherwise   = n
+
+instance NoteStore NoteStorePure where
 
     notesForTopic :: TopicId -> NoteStorePure (Vector Note)
     notesForTopic tid = NoteStorePure $

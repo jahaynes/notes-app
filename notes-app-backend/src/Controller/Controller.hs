@@ -32,7 +32,7 @@ type ApiWithSwagger =
          SwaggerSchemaUI' "swagger-ui" ("openapi.json" :> Get '[JSON] OrderedSpec)
     :<|> NotesAPI
 
-app :: (NoteStore m, UserStore m, Fresh m, Log m, Clock m)
+app :: (NoteStore m, TopicStore m, UserStore m, Fresh m, Log m, Clock m)
     => SigningKey -> [Origin] -> (forall a. m a -> IO a) -> Application
 app key origins runStore =
     cors (const (Just (corsPolicy origins))) $
@@ -69,11 +69,11 @@ loginHandler key runStore (LoginRequest n p) =
                 Left _      -> throwError err500
                 Right token -> respond (WithStatus @200 (TokenView token "Bearer" (round tokenLifetime)))
 
-storeServer :: (NoteStore m, UserStore m, Fresh m, Log m, Clock m) => ServerT StoreAPI m
+storeServer :: (NoteStore m, TopicStore m, UserStore m, Fresh m, Log m, Clock m) => ServerT StoreAPI m
 storeServer = userServer :<|> topicServer :<|> noteServer
 
     where
-    userServer :: (NoteStore m, UserStore m, Fresh m, Log m, Clock m) => ServerT UserAPI m
+    userServer :: (TopicStore m, UserStore m, Fresh m, Log m, Clock m) => ServerT UserAPI m
     userServer = meHandler :<|> createUserHandler :<|> topicsForUserHandler :<|> addTopicHandler
 
         where
@@ -90,7 +90,7 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                 UsernameTaken       -> respond (WithStatus @409 NoBody)
                 UserRefused refusal -> respond (WithStatus @422 refusal)
 
-        topicsForUserHandler :: NoteStore m => UserId -> ServerT TopicsForUser m
+        topicsForUserHandler :: TopicStore m => UserId -> ServerT TopicsForUser m
         topicsForUserHandler uid authUid
             | uid /= getAuthed authUid =
                 respond (WithStatus @403 NoBody)
@@ -98,19 +98,19 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                 topicsFor authUid >>= respond . WithStatus @200 . map toTopicView . V.toList
 
         -- Gives the user in the path a topic the token's user has.
-        addTopicHandler :: (NoteStore m, UserStore m) => UserId -> TopicId -> ServerT AddTopic m
+        addTopicHandler :: (TopicStore m, UserStore m) => UserId -> TopicId -> ServerT AddTopic m
         addTopicHandler uid tid authUid =
             shareTopic authUid uid tid >>= \case
                 Granted (Just ()) -> respond (WithStatus @204 NoBody)
                 Granted Nothing   -> respond (WithStatus @404 NoBody)
                 Denied            -> respond (WithStatus @403 NoBody)
 
-    topicServer :: (NoteStore m, Log m, Clock m) => ServerT TopicAPI m
+    topicServer :: (NoteStore m, TopicStore m, Log m, Clock m) => ServerT TopicAPI m
     topicServer = (\tid -> storeTopicHandler tid :<|> deleteTopicHandler tid)
         :<|> notesForTopicHandler
 
         where
-        deleteTopicHandler :: (NoteStore m, Log m, Clock m) => TopicId -> ServerT DeleteTopic m
+        deleteTopicHandler :: (TopicStore m, Log m, Clock m) => TopicId -> ServerT DeleteTopic m
         deleteTopicHandler tid authUid (DeleteTopicRequest uid did vc dest)
             | uid /= getAuthed authUid =
                 respond (WithStatus @403 NoBody)
@@ -121,7 +121,7 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                     TopicRefused refusal  -> respond (WithStatus @422 refusal)
                     TopicForbidden        -> respond (WithStatus @403 NoBody)
 
-        storeTopicHandler :: (NoteStore m, Log m, Clock m) => TopicId -> ServerT StoreTopic m
+        storeTopicHandler :: (TopicStore m, Log m, Clock m) => TopicId -> ServerT StoreTopic m
         storeTopicHandler tid authUid (StoreTopicRequest uid did mVc n d)
             | uid /= getAuthed authUid =
                 respond (WithStatus @403 NoBody)
@@ -131,17 +131,17 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                     Conflicted topic -> respond (WithStatus @409 (toTopicView topic))
                     Forbidden        -> respond (WithStatus @403 NoBody)
 
-        notesForTopicHandler :: NoteStore m => TopicId -> ServerT NotesForTopic m
+        notesForTopicHandler :: (NoteStore m, TopicStore m) => TopicId -> ServerT NotesForTopic m
         notesForTopicHandler tid authUid =
             notesFor authUid tid >>= \case
                 Granted notes -> respond (WithStatus @200 (map toView (V.toList notes)))
                 Denied        -> respond (WithStatus @403 NoBody)
 
-    noteServer :: (NoteStore m, Log m, Clock m) => ServerT NoteAPI m
+    noteServer :: (NoteStore m, TopicStore m, Log m, Clock m) => ServerT NoteAPI m
     noteServer = \nid -> loadHandler nid :<|> storeHandler nid :<|> deleteHandler nid
 
         where
-        loadHandler :: NoteStore m => NoteId -> ServerT LoadNote m
+        loadHandler :: (NoteStore m, TopicStore m) => NoteId -> ServerT LoadNote m
         loadHandler nid authUid =
             load authUid nid >>= \case
                 Granted (Just note) -> respond (WithStatus @200 (toView note))
