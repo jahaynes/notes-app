@@ -16,7 +16,7 @@ import           Test.Hspec
 import Auth.Password
 import Auth.Token
 import NoteStore.Class
-import NoteStore.SQLite.NoteStoreSQLite
+import NoteStore.SQLite.StoreSQLite
 import NoteStorePure
 import NotesApp
 import Types
@@ -24,7 +24,7 @@ import Types
 main :: IO ()
 main = hspec $ do
     noteStoreSpec "NoteStorePure" (pure . run)
-    noteStoreSpec "NoteStoreSQLite" (runNoteStoreSQLite ":memory:")
+    noteStoreSpec "StoreSQLite" (runStoreSQLite ":memory:")
     notesAppSpec
     passwordSpec
     tokenSpec
@@ -374,9 +374,9 @@ notesAppSpec = describe "NotesApp" $ do
         run (fmap userIdOf <$> authenticate (Username "alice") (Password "hunter22"))
             `shouldBe` Nothing
 
--- | Runs the same spec against each 'NoteStore' implementation, so the SQL
+-- | Runs the same spec against each store implementation, so the SQL
 -- conflict check is held to the same semantics as 'isNewerThan'.
-noteStoreSpec :: (NoteStore m, UserStore m) => String -> (forall a. m a -> IO a) -> Spec
+noteStoreSpec :: (NoteStore m, TopicStore m, UserStore m) => String -> (forall a. m a -> IO a) -> Spec
 noteStoreSpec name run' = describe name $ do
 
     it "loads nothing from an empty store" $
@@ -742,7 +742,7 @@ run m = runNoteStorePure m emptyStore
 runShared :: NoteStorePure a -> a
 runShared m = run (shareAll >> m)
 
-shareAll :: NoteStore m => m ()
+shareAll :: TopicStore m => m ()
 shareAll = sequence_ [ addTopicForUser u t | u <- [aliceU, bobU], t <- [defTopicId, topicX, topicY] ]
 
 topicsList :: Authed UserId -> NoteStorePure [TopicId]

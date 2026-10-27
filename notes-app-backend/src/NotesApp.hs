@@ -21,7 +21,7 @@ import qualified Data.Map.Strict as M
 import           Data.Vector          (Vector)
 
 -- | The note, if there is one and it's in one of the user's topics.
-load :: NoteStore m
+load :: (NoteStore m, TopicStore m)
      => Authed UserId -> NoteId -> m (Access (Maybe Note))
 load userId noteId =
 
@@ -35,7 +35,7 @@ load userId noteId =
         Nothing ->
             pure (Granted Nothing)
 
-notesFor :: NoteStore m
+notesFor :: (NoteStore m, TopicStore m)
          => Authed UserId -> TopicId -> m (Access (Vector Note))
 notesFor userId topicId =
 
@@ -43,13 +43,13 @@ notesFor userId topicId =
         True  -> Granted <$> notesForTopic topicId
         False -> pure Denied
 
-topicsFor :: NoteStore m
+topicsFor :: TopicStore m
           => Authed UserId -> m (Vector Topic)
 topicsFor = loadTopicsForUser
 
 -- | Gives the grantee a topic the sharer has. Nothing if there's no such
 -- grantee.
-shareTopic :: (NoteStore m, UserStore m)
+shareTopic :: (TopicStore m, UserStore m)
            => Authed UserId -> UserId -> TopicId -> m (Access (Maybe ()))
 shareTopic sharerId granteeId topicId =
 
@@ -104,7 +104,7 @@ delete userId noteId vectorClock =
             pure Forbidden
 
 
-storeTopicFor :: (NoteStore m, Log m, Clock m)
+storeTopicFor :: (TopicStore m, Log m, Clock m)
               => Authed UserId -> DeviceId -> TopicId -> Maybe VectorClock
               -> TopicName -> Maybe TopicDescription
               -> m (Written Topic)
@@ -128,7 +128,7 @@ storeTopicFor aUserId deviceId topicId mVc name mDescription = do
         Forbidden ->
             pure Forbidden
 
-deleteTopicFor :: (NoteStore m, Log m, Clock m)
+deleteTopicFor :: (TopicStore m, Log m, Clock m)
                => Authed UserId -> DeviceId -> TopicId -> VectorClock -> TopicId
                -> m (TopicDeletion Topic)
 deleteTopicFor userId deviceId topicId vectorClock destination = do

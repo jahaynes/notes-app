@@ -7,7 +7,7 @@ import Data.Text   (Text)
 import Data.Time   (UTCTime)
 import Data.Vector (Vector)
 
-class Monad m => NoteStore m where
+class Monad m => TopicStore m where
 
     hasTopic :: Authed UserId -> TopicId -> m Bool
 
@@ -22,6 +22,8 @@ class Monad m => NoteStore m where
     storeTopic :: Authed UserId -> Topic -> m (Written ())
 
     deleteTopic :: Authed UserId -> DeviceId -> UTCTime -> TopicId -> VectorClock -> TopicId -> m (TopicDeletion ())
+
+class Monad m => NoteStore m where
 
     notesForTopic :: TopicId -> m (Vector Note)
 
