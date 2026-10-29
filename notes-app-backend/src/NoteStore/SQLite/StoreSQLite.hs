@@ -2,7 +2,9 @@
 
 module NoteStore.SQLite.StoreSQLite
     ( StoreSQLite
+    , initStoreSQLite
     , runStoreSQLite
+    , runStoreSQLiteInMemory
     ) where
 
 import Auth.Password                     (saltLength)
@@ -32,9 +34,26 @@ newtype StoreSQLite a =
         deriving TopicStore via TopicStoreSQLite
         deriving UserStore  via UserStoreSQLite
 
+-- | One-off setup, before serving: switches the file to WAL (which
+-- persists in the file) and creates the schema.
+initStoreSQLite :: FilePath -> IO ()
+initStoreSQLite path =
+    bracket (open path) close $ \conn -> do
+        query_ conn "PRAGMA journal_mode = WAL" >>= \case
+            [Only ("wal" :: Text)] -> pure ()
+            mode                   -> fail ("Could not enable WAL on " ++ path ++ ": " ++ show mode)
+        create conn
+
 runStoreSQLite :: FilePath -> StoreSQLite a -> IO a
 runStoreSQLite path (StoreSQLite m) =
     bracket (open path) close $ \conn -> do
+        execute_ conn "PRAGMA busy_timeout = 5000"
+        transactionally conn (runReaderT m)
+
+-- | Each run gets its own empty database, so it creates the schema itself.
+runStoreSQLiteInMemory :: StoreSQLite a -> IO a
+runStoreSQLiteInMemory (StoreSQLite m) =
+    bracket (open ":memory:") close $ \conn -> do
         create conn
         transactionally conn (runReaderT m)
 

@@ -9,7 +9,7 @@ module NoteStore.SQLite.SQLiteTypes ( SQLClock (..)
 
 import Types
 
-import           Data.Aeson                       (eitherDecodeStrict, encode)
+import           Data.Aeson                      (eitherDecodeStrict, encode)
 import qualified Data.ByteString.Lazy             as BL
 import           Data.Text                        (Text)
 import qualified Data.Text.Encoding               as TE
@@ -27,7 +27,7 @@ txn (Txn a) = a
 
 transactionally :: Connection -> (Txn Connection -> IO a) -> IO a
 transactionally conn f =
-    withTransaction conn (f (Txn conn))
+    withImmediateTransaction conn (f (Txn conn))
 
 newtype SQLNoteId
     = SQLNoteId NoteId

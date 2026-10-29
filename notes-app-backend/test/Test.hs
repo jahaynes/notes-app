@@ -24,7 +24,7 @@ import Types
 main :: IO ()
 main = hspec $ do
     noteStoreSpec "NoteStorePure" (pure . run)
-    noteStoreSpec "StoreSQLite" (runStoreSQLite ":memory:")
+    noteStoreSpec "StoreSQLite" runStoreSQLiteInMemory
     notesAppSpec
     passwordSpec
     tokenSpec
