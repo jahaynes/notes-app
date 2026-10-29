@@ -9,7 +9,8 @@ import NoteStore.SQLite.TopicStoreSQLite (userHasTopic)
 import Types
 
 import           Control.Monad.IO.Class     (MonadIO (liftIO))
-import           Control.Monad.Trans.Reader (ReaderT, ask)
+import           Control.Monad.Trans.Reader (ReaderT, ask, asks)
+import           Data.Functor               ((<&>))
 import           Data.Maybe                 (listToMaybe)
 import           Data.String.Interpolate    (iii)
 import           Data.Text                  (Text)
@@ -19,12 +20,12 @@ import qualified Data.Vector as V
 import           Database.SQLite.Simple
 
 newtype NoteStoreSQLite a =
-    NoteStoreSQLite (ReaderT Connection IO a)
+    NoteStoreSQLite (ReaderT (Txn Connection) IO a)
         deriving (Functor, Applicative, Monad, MonadIO)
 
-noteWithinReach :: Connection -> UserId -> NoteId -> IO Bool
+noteWithinReach :: Txn Connection -> UserId -> NoteId -> IO Bool
 noteWithinReach conn uid nid = do
-    [Only outOfReach] <- query conn sqlNoteOutOfReach (SQLNoteId nid, SQLUserId uid)
+    [Only outOfReach] <- query (txn conn) sqlNoteOutOfReach (SQLNoteId nid, SQLUserId uid)
     pure (not outOfReach)
 
     where
@@ -48,7 +49,7 @@ instance NoteStore NoteStoreSQLite where
 
     notesForTopic :: TopicId -> NoteStoreSQLite (Vector Note)
     notesForTopic tid = NoteStoreSQLite $ do
-        conn <- ask
+        conn <- asks txn
         liftIO $
             V.fromList . map toNote
                 <$> query conn sqlNotesForTopic (Only (SQLTopicId tid))
@@ -63,7 +64,7 @@ instance NoteStore NoteStoreSQLite where
 
     loadNote :: NoteId -> NoteStoreSQLite (Maybe Note)
     loadNote nid = NoteStoreSQLite $ do
-        conn <- ask
+        conn <- asks txn
         liftIO $
             listToMaybe . map toNote
                 <$> query conn sqlLoadNote (Only (SQLNoteId nid))
@@ -78,17 +79,18 @@ instance NoteStore NoteStoreSQLite where
     storeNote :: Authed UserId -> Note -> NoteStoreSQLite (Written ())
     storeNote uid (Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
                         showFull topicId updatedAt) = NoteStoreSQLite $ do
-        conn <- ask
-        liftIO . withTransaction conn $ do
-            allowed <- (&&) <$> userHasTopic conn uid topicId <*> noteWithinReach conn (getAuthed uid) nid
+        tconn <- ask
+        let conn = txn tconn
+        liftIO $ do
+            allowed <- (&&) <$> userHasTopic tconn uid topicId <*> noteWithinReach tconn (getAuthed uid) nid
             if not allowed
                 then pure Forbidden
                 else do
                     execute conn sqlStoreNote ( SQLNoteId nid, value, SQLClock clock
                                               , title, colorIndex, showFull, SQLTopicId topicId, updatedAt )
-                    changes conn >>= \case
-                        0 -> pure (Conflicted ())
-                        _ -> pure Clean
+                    changes conn <&> \case
+                        0 -> Conflicted ()
+                        _ -> Clean
 
         where
         sqlStoreNote :: Query
@@ -117,9 +119,10 @@ instance NoteStore NoteStoreSQLite where
 
     deleteNote :: Authed UserId -> NoteId -> VectorClock -> NoteStoreSQLite (Written ())
     deleteNote uid nid clock = NoteStoreSQLite $ do
-        conn <- ask
-        liftIO . withTransaction conn $
-            noteWithinReach conn (getAuthed uid) nid >>= \case
+        tconn <- ask
+        let conn = txn tconn
+        liftIO $
+            noteWithinReach tconn (getAuthed uid) nid >>= \case
                 False -> pure Forbidden
                 True  -> do
                     execute conn sqlDeleteNote (SQLNoteId nid, SQLClock clock)

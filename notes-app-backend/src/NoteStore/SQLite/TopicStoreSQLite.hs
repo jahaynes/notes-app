@@ -12,7 +12,7 @@ import NoteStore.SQLite.SQLiteTypes
 import Types
 
 import           Control.Monad.IO.Class     (MonadIO (liftIO))
-import           Control.Monad.Trans.Reader (ReaderT, ask)
+import           Control.Monad.Trans.Reader (ReaderT, ask, asks)
 import           Data.Maybe                 (listToMaybe)
 import           Data.String.Interpolate    (iii)
 import           Data.Text                  (Text)
@@ -22,7 +22,7 @@ import qualified Data.Vector as V
 import           Database.SQLite.Simple
 
 newtype TopicStoreSQLite a =
-    TopicStoreSQLite (ReaderT Connection IO a)
+    TopicStoreSQLite (ReaderT (Txn Connection) IO a)
         deriving (Functor, Applicative, Monad, MonadIO)
 
 sqlAddUserTopic :: Query
@@ -30,10 +30,10 @@ sqlAddUserTopic = [iii|
     INSERT OR IGNORE INTO UserTopic (user_id, topic_id)
     VALUES (?, ?); |]
 
-userHasTopic :: Connection -> Authed UserId -> TopicId -> IO Bool
-userHasTopic conn aUid tid = do
+userHasTopic :: Txn Connection -> Authed UserId -> TopicId -> IO Bool
+userHasTopic tconn aUid tid = do
     let uid = getAuthed aUid
-    [Only has] <- query conn sqlHasTopic (SQLUserId uid, SQLTopicId tid)
+    [Only has] <- query (txn tconn) sqlHasTopic (SQLUserId uid, SQLTopicId tid)
     pure has
 
     where
@@ -53,13 +53,13 @@ instance TopicStore TopicStoreSQLite where
 
     hasTopic :: Authed UserId -> TopicId -> TopicStoreSQLite Bool
     hasTopic uid tid = TopicStoreSQLite $ do
-        conn <- ask
-        liftIO $ userHasTopic conn uid tid
+        tconn <- ask
+        liftIO $ userHasTopic tconn uid tid
 
     topicsForUser :: Authed UserId -> TopicStoreSQLite (Vector TopicId)
     topicsForUser aUid = TopicStoreSQLite $ do
         let uid = getAuthed aUid
-        conn <- ask
+        conn <- asks txn
         liftIO $
             V.fromList . map (\(Only (SQLTopicId tid)) -> tid)
                 <$> query conn sqlTopicsForUser (Only (SQLUserId uid))
@@ -75,7 +75,7 @@ instance TopicStore TopicStoreSQLite where
     loadTopicsForUser :: Authed UserId -> TopicStoreSQLite (Vector Topic)
     loadTopicsForUser aUid = TopicStoreSQLite $ do
         let uid = getAuthed aUid
-        conn <- ask
+        conn <- asks txn
         liftIO $
             V.fromList . map toTopic
                 <$> query conn sqlLoadTopicsForUser (Only (SQLUserId uid))
@@ -91,12 +91,12 @@ instance TopicStore TopicStoreSQLite where
 
     addTopicForUser :: UserId -> TopicId -> TopicStoreSQLite ()
     addTopicForUser uid tid = TopicStoreSQLite $ do
-        conn <- ask
+        conn <- asks txn
         liftIO $ execute conn sqlAddUserTopic (SQLUserId uid, SQLTopicId tid)
 
     loadTopic :: TopicId -> TopicStoreSQLite (Maybe Topic)
     loadTopic tid = TopicStoreSQLite $ do
-        conn <- ask
+        conn <- asks txn
         liftIO $
             listToMaybe . map toTopic
                 <$> query conn sqlLoadTopic (Only (SQLTopicId tid))
@@ -110,10 +110,11 @@ instance TopicStore TopicStoreSQLite where
 
     storeTopic :: Authed UserId -> Topic -> TopicStoreSQLite (Written ())
     storeTopic uid (Topic tid clock (TopicName name) mDescription updatedAt) = TopicStoreSQLite $ do
-        conn <- ask
-        liftIO . withTransaction conn $ do
+        tconn <- ask
+        let conn = txn tconn
+        liftIO $ do
             [Only unclaimed] <- query conn sqlUnclaimed (SQLTopicId tid, SQLTopicId tid, SQLTopicId tid)
-            allowed <- (unclaimed ||) <$> userHasTopic conn uid tid
+            allowed <- (unclaimed ||) <$> userHasTopic tconn uid tid
             if not allowed
                 then pure Forbidden
                 else do
@@ -158,11 +159,12 @@ instance TopicStore TopicStoreSQLite where
     deleteTopic :: Authed UserId -> DeviceId -> UTCTime -> TopicId -> VectorClock -> TopicId
                 -> TopicStoreSQLite (TopicDeletion ())
     deleteTopic uid did updatedAt tid clock dest = TopicStoreSQLite $ do
-        conn <- ask
-        liftIO . withTransaction conn $ do
+        tconn <- ask
+        let conn = txn tconn
+        liftIO $ do
 
-            hasTid     <- userHasTopic conn uid tid
-            hasDest    <- userHasTopic conn uid dest
+            hasTid     <- userHasTopic tconn uid tid
+            hasDest    <- userHasTopic tconn uid dest
             destExists <- not . null <$> (query conn sqlTopicExists (Only (SQLTopicId dest)) :: IO [Only Int])
             [Only sharedWithNotes] <- query conn sqlSharedWithNotes (SQLTopicId tid, SQLTopicId tid)
 
@@ -173,12 +175,13 @@ instance TopicStore TopicStoreSQLite where
                     execute conn sqlDeleteTopic (SQLTopicId tid, SQLClock clock)
                     changes conn >>= \case
                         0 -> query conn sqlTopicExists (Only (SQLTopicId tid)) >>= \case
-                                 []                -> moveNotes conn
+                                 []                -> moveNotes tconn
                                  (_ :: [Only Int]) -> pure (TopicConflicted ())
-                        _ -> moveNotes conn
+                        _ -> moveNotes tconn
 
         where
-        moveNotes conn = do
+        moveNotes tconn = do
+            let conn = txn tconn
             moved <- query conn sqlNoteClocksInTopic (Only (SQLTopicId tid))
             mapM_ (\(nid :: SQLNoteId, SQLClock vc) ->
                        execute conn sqlMoveNote (SQLTopicId dest, SQLClock (tick (UserDevice (getAuthed uid) did) vc), updatedAt, nid))
