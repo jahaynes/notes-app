@@ -80,7 +80,11 @@ test-suite notes-app-backend-test
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test
     main-is:          Test.hs
-    other-modules:    NoteStorePure
+    other-modules:    Pure.NoteStorePure
+                      Pure.PureTypes
+                      Pure.StorePure
+                      Pure.TopicStorePure
+                      Pure.UserStorePure
     build-depends:
         base,
         hspec,

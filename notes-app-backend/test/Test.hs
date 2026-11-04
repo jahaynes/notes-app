@@ -17,13 +17,13 @@ import Auth.Password
 import Auth.Token
 import NoteStore.Class
 import NoteStore.SQLite.StoreSQLite
-import NoteStorePure
 import NotesApp
+import Pure.StorePure
 import Types
 
 main :: IO ()
 main = hspec $ do
-    noteStoreSpec "NoteStorePure" (pure . run)
+    noteStoreSpec "StorePure" (pure . run)
     noteStoreSpec "StoreSQLite" runStoreSQLiteInMemory
     notesAppSpec
     passwordSpec
@@ -735,26 +735,26 @@ noteStoreSpec name run' = describe name $ do
                  (,) c <$> loadUserByName (Username "Alice"))
             `shouldReturn` (UserCreated (), Just (user bobU "Alice"))
 
-run :: NoteStorePure a -> a
-run m = runNoteStorePure m emptyStore
+run :: StorePure a -> a
+run m = runStorePure m emptyStore
 
 -- | Runs with alice and bob both having every topic the notes here go in.
-runShared :: NoteStorePure a -> a
+runShared :: StorePure a -> a
 runShared m = run (shareAll >> m)
 
 shareAll :: TopicStore m => m ()
 shareAll = sequence_ [ addTopicForUser u t | u <- [aliceU, bobU], t <- [defTopicId, topicX, topicY] ]
 
-topicsList :: Authed UserId -> NoteStorePure [TopicId]
+topicsList :: Authed UserId -> StorePure [TopicId]
 topicsList = fmap V.toList . topicsForUser
 
-notesList :: TopicId -> NoteStorePure [Note]
+notesList :: TopicId -> StorePure [Note]
 notesList = fmap V.toList . notesForTopic
 
-put :: Authed UserId -> DeviceId -> NoteId -> Maybe VectorClock -> Text -> NoteStorePure (Written Note)
+put :: Authed UserId -> DeviceId -> NoteId -> Maybe VectorClock -> Text -> StorePure (Written Note)
 put = putIn defTopicId
 
-putIn :: TopicId -> Authed UserId -> DeviceId -> NoteId -> Maybe VectorClock -> Text -> NoteStorePure (Written Note)
+putIn :: TopicId -> Authed UserId -> DeviceId -> NoteId -> Maybe VectorClock -> Text -> StorePure (Written Note)
 putIn tid uid did nid mVc content =
     store uid did nid mVc defTitle (Content content) defColorIndex defShowFull tid
 
@@ -777,7 +777,7 @@ user uid name =
 userIdOf :: User -> UserId
 userIdOf (User uid _ _ _) = uid
 
-withTopics :: UserCreation User -> NoteStorePure (UserCreation (UserId, [TopicId]))
+withTopics :: UserCreation User -> StorePure (UserCreation (UserId, [TopicId]))
 withTopics = \case
     UserCreated u -> UserCreated . (,) (userIdOf u) <$> topicsList (authed (userIdOf u))
     UsernameTaken -> pure UsernameTaken
