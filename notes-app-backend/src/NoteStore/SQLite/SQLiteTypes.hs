@@ -2,11 +2,14 @@ module NoteStore.SQLite.SQLiteTypes ( SQLClock (..)
                                     , SQLNoteId (..)
                                     , SQLTopicId (..)
                                     , SQLUserId (..)
+                                    , Txn
+                                    , transactionally
+                                    , txn
                                     ) where
 
 import Types
 
-import           Data.Aeson                       (eitherDecodeStrict, encode)
+import           Data.Aeson                      (eitherDecodeStrict, encode)
 import qualified Data.ByteString.Lazy             as BL
 import           Data.Text                        (Text)
 import qualified Data.Text.Encoding               as TE
@@ -15,6 +18,16 @@ import           Database.SQLite.Simple
 import           Database.SQLite.Simple.FromField (FromField (..), returnError)
 import           Database.SQLite.Simple.Ok        (Ok (..))
 import           Database.SQLite.Simple.ToField   (ToField (..))
+
+newtype Txn a =
+    Txn a
+
+txn :: Txn a -> a
+txn (Txn a) = a
+
+transactionally :: Connection -> (Txn Connection -> IO a) -> IO a
+transactionally conn f =
+    withImmediateTransaction conn (f (Txn conn))
 
 newtype SQLNoteId
     = SQLNoteId NoteId

@@ -8,7 +8,7 @@ import NoteStore.SQLite.TopicStoreSQLite (sqlAddUserTopic)
 import Types
 
 import           Control.Monad.IO.Class     (MonadIO (liftIO))
-import           Control.Monad.Trans.Reader (ReaderT, ask)
+import           Control.Monad.Trans.Reader (ReaderT, asks)
 import           Data.ByteString            (ByteString)
 import           Data.Maybe                 (listToMaybe)
 import           Data.String.Interpolate    (iii)
@@ -17,7 +17,7 @@ import           Data.Time                  (UTCTime)
 import           Database.SQLite.Simple
 
 newtype UserStoreSQLite a =
-    UserStoreSQLite (ReaderT Connection IO a)
+    UserStoreSQLite (ReaderT (Txn Connection) IO a)
         deriving (Functor, Applicative, Monad, MonadIO)
 
 toUser :: (SQLUserId, Text, ByteString, ByteString, UTCTime) -> User
@@ -29,8 +29,8 @@ instance UserStore UserStoreSQLite where
     createUser :: User -> Topic -> UserStoreSQLite (UserCreation ())
     createUser (User uid (Username username) (PasswordHash (Salt salt) hash) createdAt)
                (Topic tid clock (TopicName name) mDescription updatedAt) = UserStoreSQLite $ do
-        conn <- ask
-        liftIO . withTransaction conn $ do
+        conn <- asks txn
+        liftIO $ do
             execute conn sqlCreateUser (SQLUserId uid, username, salt, hash, createdAt)
             changes conn >>= \case
                 0 -> pure UsernameTaken
@@ -55,7 +55,7 @@ instance UserStore UserStoreSQLite where
 
     loadUser :: UserId -> UserStoreSQLite (Maybe User)
     loadUser uid = UserStoreSQLite $ do
-        conn <- ask
+        conn <- asks txn
         liftIO $
             listToMaybe . map toUser
                 <$> query conn sqlLoadUser (Only (SQLUserId uid))
@@ -69,7 +69,7 @@ instance UserStore UserStoreSQLite where
 
     loadUserByName :: Username -> UserStoreSQLite (Maybe User)
     loadUserByName (Username username) = UserStoreSQLite $ do
-        conn <- ask
+        conn <- asks txn
         liftIO $
             listToMaybe . map toUser
                 <$> query conn sqlLoadUserByName (Only username)
