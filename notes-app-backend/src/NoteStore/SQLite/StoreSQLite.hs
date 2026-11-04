@@ -2,13 +2,16 @@
 
 module NoteStore.SQLite.StoreSQLite
     ( StoreSQLite
+    , initStoreSQLite
     , runStoreSQLite
+    , runStoreSQLiteInMemory
     ) where
 
 import Auth.Password                     (saltLength)
 import NoteStore.Class
 import NoteStore.SQLite.NoteStoreSQLite  (NoteStoreSQLite (..))
 import NoteStore.SQLite.TopicStoreSQLite (TopicStoreSQLite (..))
+import NoteStore.SQLite.SQLiteTypes      (Txn, transactionally)
 import NoteStore.SQLite.UserStoreSQLite  (UserStoreSQLite (..))
 import Types
 
@@ -25,17 +28,31 @@ import           Database.SQLite.Simple
 import           System.IO                  (hPrint, stderr)
 
 newtype StoreSQLite a =
-    StoreSQLite (ReaderT Connection IO a)
+    StoreSQLite (ReaderT (Txn Connection) IO a)
         deriving (Functor, Applicative, Monad, MonadIO)
         deriving NoteStore  via NoteStoreSQLite
         deriving TopicStore via TopicStoreSQLite
         deriving UserStore  via UserStoreSQLite
 
+initStoreSQLite :: FilePath -> IO ()
+initStoreSQLite path =
+    bracket (open path) close $ \conn -> do
+        query_ conn "PRAGMA journal_mode = WAL" >>= \case
+            [Only ("wal" :: Text)] -> pure ()
+            mode                   -> fail ("Could not enable WAL on " ++ path ++ ": " ++ show mode)
+        create conn
+
 runStoreSQLite :: FilePath -> StoreSQLite a -> IO a
 runStoreSQLite path (StoreSQLite m) =
     bracket (open path) close $ \conn -> do
+        execute_ conn "PRAGMA busy_timeout = 5000"
+        transactionally conn (runReaderT m)
+
+runStoreSQLiteInMemory :: StoreSQLite a -> IO a
+runStoreSQLiteInMemory (StoreSQLite m) =
+    bracket (open ":memory:") close $ \conn -> do
         create conn
-        runReaderT m conn
+        transactionally conn (runReaderT m)
 
 create :: Connection -> IO ()
 create conn = withTransaction conn $
