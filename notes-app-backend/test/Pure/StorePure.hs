@@ -9,6 +9,7 @@ module Pure.StorePure
     , runStorePure
     ) where
 
+import Auth.Password       (saltLength)
 import NoteStore.Class
 import Pure.NoteStorePure  (NoteStorePure (..))
 import Pure.PureTypes
@@ -16,8 +17,11 @@ import Pure.TopicStorePure (TopicStorePure (..))
 import Pure.UserStorePure  (UserStorePure (..))
 import Types
 
-import           Control.Monad.Trans.State.Strict (State, evalState, gets)
-import qualified Data.Map.Strict as M
+import           Control.Monad.Trans.State.Strict (State, evalState, state)
+import           Crypto.Random                    (randomBytesGenerate)
+import           Data.ByteString                  (ByteString)
+import qualified Data.ByteString.Lazy as BL
+import           Data.Maybe                       (fromMaybe)
 import           Data.Time                        (UTCTime (..), fromGregorian)
 import qualified Data.UUID       as UUID
 
@@ -38,11 +42,19 @@ pureNow :: UTCTime
 pureNow = UTCTime (fromGregorian 2026 1 1) 0
 
 instance Fresh StorePure where
-    freshUserId = StorePure $
-        gets (UserId . UUID.fromWords 0 0 1 . fromIntegral . M.size . users)
-    freshTopicId = StorePure $
-        gets (TopicId . UUID.fromWords 0 0 2 . fromIntegral . M.size . topics)
-    freshSalt = pure pureSalt
+    freshUserId  = UserId <$> randomUUID
+    freshTopicId = TopicId <$> randomUUID
+    freshSalt    = Salt <$> randomBytes saltLength
+
+randomUUID :: StorePure UUID.UUID
+randomUUID =
+    fromMaybe (error "randomUUID: not 16 bytes") . UUID.fromByteString . BL.fromStrict
+        <$> randomBytes 16
+
+randomBytes :: Int -> StorePure ByteString
+randomBytes n = StorePure . state $ \s ->
+    let (bytes, g) = randomBytesGenerate n (drg s)
+    in (bytes, s { drg = g })
 
 pureSalt :: Salt
 pureSalt = Salt "pure-salt-16byte"

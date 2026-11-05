@@ -23,7 +23,7 @@ import Types
 
 main :: IO ()
 main = hspec $ do
-    noteStoreSpec "StorePure" (pure . run)
+    noteStoreSpec "StorePure" (\m -> pure $! run m)
     noteStoreSpec "StoreSQLite" runStoreSQLiteInMemory
     notesAppSpec
     passwordSpec
@@ -355,6 +355,21 @@ notesAppSpec = describe "NotesApp" $ do
             `shouldSatisfy` \case
                 [Just t@(Topic tid _ _ _ _)] -> t == defaultTopic tid
                 _                            -> False
+
+    it "never reuses a deleted topic's id for a new user's topic" $
+        run (register (Username "alice") (Password "hunter22") >>= \case
+                UserCreated (User uid _ _ _) -> do
+                    let aliceA' = authed uid
+                    own <- topicsList aliceA'
+                    _ <- storeTopicFor aliceA' aliceD topicX Nothing (TopicName "X") Nothing
+                    b <- register (Username "bob") (Password "hunter22") >>= withTopics
+                    _ <- traverse (\t -> deleteTopicFor aliceA' aliceD t (clock []) topicX) own
+                    c <- register (Username "carol") (Password "hunter22") >>= withTopics
+                    pure [b, c]
+                _ -> pure [])
+            `shouldSatisfy` \case
+                [UserCreated (_, [tb]), UserCreated (_, [tc])] -> tb /= tc
+                _                                              -> False
 
     it "accepts a one character password" $
         run ((() <$) <$> register (Username "alice") (Password "x"))
@@ -722,6 +737,26 @@ noteStoreSpec name run' = describe name $ do
                  c <- createUser (user bobU "alice") (defaultTopic topicY)
                  (,,) c <$> loadUserByName (Username "alice") <*> loadTopic topicY)
             `shouldReturn` (UsernameTaken, Just (user aliceU "alice"), Nothing)
+
+    it "fails on a new username with an existing user id" $
+        run' (do _ <- createUser (user aliceU "alice") (defaultTopic topicX)
+                 createUser (user aliceU "bob") (defaultTopic topicY))
+            `shouldThrow` anyException
+
+    it "fails on a new username with an existing topic id" $
+        run' (do _ <- createUser (user aliceU "alice") (defaultTopic topicX)
+                 createUser (user bobU "bob") (defaultTopic topicX))
+            `shouldThrow` anyException
+
+    it "reports a taken username even when the topic id also exists" $
+        run' (do _ <- createUser (user aliceU "alice") (defaultTopic topicX)
+                 createUser (user bobU "alice") (defaultTopic topicX))
+            `shouldReturn` UsernameTaken
+
+    it "reports a taken username even when the user id also exists" $
+        run' (do _ <- createUser (user aliceU "alice") (defaultTopic topicX)
+                 createUser (user aliceU "alice") (defaultTopic topicY))
+            `shouldReturn` UsernameTaken
 
     it "loads a user back by id" $
         run' (do _ <- createUser (user aliceU "alice") (defaultTopic topicX)

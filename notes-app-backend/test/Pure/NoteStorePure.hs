@@ -44,8 +44,7 @@ instance NoteStore NoteStorePure where
                 | not (note `isNewerThan` storedNote) -> pure (Conflicted ())
 
             _ -> do
-                modify' $ \(Store ns ts uts' us) ->
-                    Store (M.insert nid note ns) ts uts' us
+                modify' $ \s -> s { notes = M.insert nid note (notes s) }
                 pure Clean
 
     deleteNote :: Authed UserId -> NoteId -> VectorClock -> NoteStorePure (Written ())
@@ -64,5 +63,5 @@ instance NoteStore NoteStorePure where
                 | not (incoming `isNewerThan` stored) -> pure (Conflicted ())
 
             _ -> do
-                modify' $ \(Store ns ts uts' us) -> Store (M.delete nid ns) ts uts' us
+                modify' $ \s -> s { notes = M.delete nid (notes s) }
                 pure Clean

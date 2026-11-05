@@ -36,7 +36,7 @@ instance TopicStore TopicStorePure where
 
     addTopicForUser :: UserId -> TopicId -> TopicStorePure ()
     addTopicForUser uid tid = TopicStorePure $
-        modify' $ \(Store ns ts uts us) -> Store ns ts (grant uid tid uts) us
+        modify' $ \s -> s { userTopics = grant uid tid (userTopics s) }
 
     loadTopic :: TopicId -> TopicStorePure (Maybe Topic)
     loadTopic tid = TopicStorePure $ gets (M.lookup tid . topics)
@@ -44,7 +44,7 @@ instance TopicStore TopicStorePure where
     storeTopic :: Authed UserId -> Topic -> TopicStorePure (Written ())
     storeTopic aUid topic@(Topic tid _ _ _ _) = TopicStorePure $ do
 
-        Store ns ts uts us <- get
+        Store ns ts uts us g <- get
 
         let uid       = getAuthed aUid
             unclaimed = not (any (S.member tid) uts)
@@ -59,14 +59,14 @@ instance TopicStore TopicStorePure where
                 | not (topic `isNewerThan` storedTopic) -> pure (Conflicted ())
 
             _ -> do
-                put (Store ns (M.insert tid topic ts) (grant uid tid uts) us)
+                put (Store ns (M.insert tid topic ts) (grant uid tid uts) us g)
                 pure Clean
 
     deleteTopic :: Authed UserId -> DeviceId -> UTCTime -> TopicId -> VectorClock -> TopicId
                 -> TopicStorePure (TopicDeletion ())
     deleteTopic aUid did updatedAt tid incoming dest = TopicStorePure $ do
 
-        Store ns ts uts us <- get
+        Store ns ts uts us g <- get
 
         let hasNotes  = any (\(Note _ _ _ _ _ _ ntid _) -> ntid == tid) ns
             userCount = M.size (M.filter (S.member tid) uts)
@@ -88,6 +88,7 @@ instance TopicStore TopicStorePure where
                             (M.delete tid ts)
                             (M.map (S.delete tid) uts)
                             us
+                            g
                 pure TopicDeleted
 
         where

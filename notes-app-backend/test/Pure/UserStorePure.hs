@@ -6,7 +6,7 @@ import NoteStore.Class
 import Pure.PureTypes
 import Types
 
-import           Control.Monad.Trans.State.Strict (State, gets, modify')
+import           Control.Monad.Trans.State.Strict (State, get, gets, put)
 import           Data.List                        (find)
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict as M
@@ -18,16 +18,23 @@ newtype UserStorePure a =
 instance UserStore UserStorePure where
 
     createUser :: User -> Topic -> UserStorePure (UserCreation ())
-    createUser user@(User uid username _ _) topic@(Topic tid _ _ _ _) = UserStorePure $
+    createUser user@(User uid username _ _) topic@(Topic tid _ _ _ _) = UserStorePure $ do
 
-        gets (byName username . users) >>= \case
+        s <- get
+
+        case byName username (users s) of
 
             Just _ -> pure UsernameTaken
 
-            Nothing -> do
-                modify' $ \(Store ns ts uts us) ->
-                    Store ns (M.insert tid topic ts) (grant uid tid uts) (M.insert uid user us)
-                pure (UserCreated ())
+            Nothing
+                | M.member uid (users s) -> error "createUser: duplicate user id"
+                | M.member tid (topics s) -> error "createUser: duplicate topic id"
+                | otherwise -> do
+                    put s { topics     = M.insert tid topic (topics s)
+                          , userTopics = grant uid tid (userTopics s)
+                          , users      = M.insert uid user (users s)
+                          }
+                    pure (UserCreated ())
 
     loadUser :: UserId -> UserStorePure (Maybe User)
     loadUser uid = UserStorePure $ gets (M.lookup uid . users)
