@@ -21,7 +21,7 @@ class Monad m => TopicStore m where
 
     storeTopic :: Authed UserId -> Topic -> m (Written ())
 
-    deleteTopic :: Authed UserId -> DeviceId -> UTCTime -> TopicId -> VectorClock -> TopicId -> m (TopicDeletion ())
+    deleteTopic :: Authed UserId -> TopicId -> VectorClock -> m (TopicDeletion ())
 
 class Monad m => NoteStore m where
 
@@ -30,6 +30,8 @@ class Monad m => NoteStore m where
     loadNote :: NoteId -> m (Maybe Note)
 
     storeNote :: Authed UserId -> Note -> m (Written ())
+
+    moveNote :: Authed UserId -> TopicId -> Note -> m (NoteMove ())
 
     deleteNote :: Authed UserId -> NoteId -> VectorClock -> m (Written ())
 

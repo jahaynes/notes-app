@@ -40,12 +40,35 @@ instance NoteStore NoteStorePure where
             Just (Note _ _ _ _ _ _ storedTid _)
                 | not (has uid storedTid uts) -> pure Forbidden
 
-            Just storedNote
-                | not (note `isNewerThan` storedNote) -> pure (Conflicted ())
+            Just storedNote@(Note _ _ _ _ _ _ storedTid _)
+                | storedTid /= tid || not (note `isNewerThan` storedNote) -> pure (Conflicted ())
 
             _ -> do
                 modify' $ \s -> s { notes = M.insert nid note (notes s) }
                 pure Clean
+
+    moveNote :: Authed UserId -> TopicId -> Note -> NoteStorePure (NoteMove ())
+    moveNote aUid from note@(Note nid _ _ _ _ _ to _) = NoteStorePure $ do
+
+        uts <- gets userTopics
+
+        let uid = getAuthed aUid
+
+        gets (M.lookup nid . notes) >>= \case
+
+            _ | not (has uid to uts) -> pure MoveForbidden
+
+            Nothing -> pure NoteGone
+
+            Just (Note _ _ _ _ _ _ storedTid _)
+                | not (has uid storedTid uts) -> pure MoveForbidden
+
+            Just storedNote@(Note _ _ _ _ _ _ storedTid _)
+                | storedTid /= from || not (note `isNewerThan` storedNote) -> pure (MoveConflicted ())
+
+            _ -> do
+                modify' $ \s -> s { notes = M.insert nid note (notes s) }
+                pure NoteMoved
 
     deleteNote :: Authed UserId -> NoteId -> VectorClock -> NoteStorePure (Written ())
     deleteNote aUid nid incoming = NoteStorePure $ do

@@ -2,6 +2,7 @@ module NotesApp ( authenticate
                 , delete
                 , deleteTopicFor
                 , load
+                , move
                 , notesFor
                 , register
                 , shareTopic
@@ -89,6 +90,29 @@ store aUserId deviceId noteId mVc title content colorIndex showFull topicId = do
         Forbidden ->
             pure Forbidden
 
+move :: (NoteStore m, Log m, Clock m)
+     => Authed UserId -> NoteId -> VectorClock
+     -> Title -> Content -> ColorIndex -> Bool -> TopicId -> TopicId
+     -> m (NoteMove Note)
+move userId noteId vectorClock title content colorIndex showFull from to = do
+
+    updatedAt <- now
+
+    moveNote userId from (Note noteId vectorClock title content colorIndex showFull to updatedAt) >>= \case
+
+        NoteMoved -> do
+            lPutStrLn "Note moved"
+            pure NoteMoved
+
+        MoveConflicted () ->
+            maybe NoteGone MoveConflicted <$> loadNote noteId
+
+        MoveForbidden ->
+            pure MoveForbidden
+
+        NoteGone ->
+            pure NoteGone
+
 delete :: (NoteStore m, Log m)
        => Authed UserId -> NoteId -> VectorClock -> m (Written Note)
 delete userId noteId vectorClock =
@@ -130,14 +154,12 @@ storeTopicFor aUserId deviceId topicId mVc name mDescription = do
         Forbidden ->
             pure Forbidden
 
-deleteTopicFor :: (TopicStore m, Log m, Clock m)
-               => Authed UserId -> DeviceId -> TopicId -> VectorClock -> TopicId
+deleteTopicFor :: (TopicStore m, Log m)
+               => Authed UserId -> TopicId -> VectorClock
                -> m (TopicDeletion Topic)
-deleteTopicFor userId deviceId topicId vectorClock destination = do
+deleteTopicFor userId topicId vectorClock =
 
-    updatedAt <- now
-
-    deleteTopic userId deviceId updatedAt topicId vectorClock destination >>= \case
+    deleteTopic userId topicId vectorClock >>= \case
 
         TopicDeleted -> do
             lPutStrLn "Topic deleted"

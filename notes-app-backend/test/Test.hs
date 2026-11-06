@@ -235,7 +235,7 @@ notesAppSpec = describe "NotesApp" $ do
     it "stops listing a note under a topic it has moved out of" $
         runShared (do _ <- putIn topicX aliceA aliceD noteA Nothing "a"
                       _ <- putIn topicX bobA bobD noteC Nothing "c"
-                      _ <- putIn topicY aliceA aliceD noteA (Just (clock [(alice, 1)])) "a moved"
+                      _ <- moveTo topicX topicY aliceA noteA (clock [(alice, 1)]) "a moved"
                       (,) <$> notesList topicX <*> notesList topicY)
             `shouldBe`
                 ( [ noteIn topicX noteC [(bob, 0)] "c" ]
@@ -263,50 +263,69 @@ notesAppSpec = describe "NotesApp" $ do
                       (,) r <$> loadNote noteA)
             `shouldBe` (Clean, Just (note noteA [(bob, 0)] "new"))
 
-    it "deletes a topic, moving its notes to the destination" $
+    it "moves a note, giving back what's stored afterwards" $
+        runShared (do _ <- putIn topicX aliceA aliceD noteA Nothing "a"
+                      r <- moveTo topicX topicY aliceA noteA (clock [(alice, 1)]) "for Y"
+                      (,,) r <$> notesList topicX <*> notesList topicY)
+            `shouldBe` (NoteMoved, [], [ noteIn topicY noteA [(alice, 1)] "for Y" ])
+
+    it "returns the stored note on a stale move and leaves it where it is" $
+        let stored = noteIn topicX noteA [(alice, 2)] "a"
+        in runShared (do _ <- putIn topicX aliceA aliceD noteA (Just (clock [(alice, 2)])) "a"
+                         r <- moveTo topicX topicY aliceA noteA (clock [(alice, 1)]) "for Y"
+                         (,) r <$> notesList topicX)
+            `shouldBe` (MoveConflicted stored, [stored])
+
+    it "reports moving a note that's gone, without recreating it" $
+        runShared (do r <- moveTo topicX topicY aliceA noteA (clock [(alice, 1)]) "for Y"
+                      (,) r <$> notesList topicY)
+            `shouldBe` (NoteGone, [])
+
+    it "returns the stored note when a write tries to change its topic" $
+        let stored = noteIn topicX noteA [(alice, 0)] "a"
+        in runShared (do _ <- putIn topicX aliceA aliceD noteA Nothing "a"
+                         r <- putIn topicY aliceA aliceD noteA (Just (clock [(alice, 1)])) "moved"
+                         (,,) r <$> notesList topicX <*> notesList topicY)
+            `shouldBe` (Conflicted stored, [stored], [])
+
+    it "deletes a topic with no notes" $
+        run (do _ <- storeTopicFor aliceA aliceD topicX Nothing (TopicName "X") Nothing
+                r <- deleteTopicFor aliceA topicX (clock [(alice, 0)])
+                (,,) r <$> loadTopic topicX <*> topicsList aliceA)
+            `shouldBe` (TopicDeleted, Nothing, [])
+
+    it "refuses to delete a topic with notes until they've been moved out" $
         run (do _ <- storeTopicFor aliceA aliceD topicX Nothing (TopicName "X") Nothing
                 _ <- storeTopicFor aliceA aliceD topicY Nothing (TopicName "Y") Nothing
                 _ <- putIn topicX aliceA aliceD noteA Nothing "a"
-                r <- deleteTopicFor aliceA aliceD topicX (clock [(alice, 0)]) topicY
-                (,,) r <$> loadTopic topicX <*> notesList topicY)
-            `shouldBe` (TopicDeleted, Nothing, [ noteIn topicY noteA [(alice, 1)] "a" ])
+                refused <- deleteTopicFor aliceA topicX (clock [(alice, 0)])
+                _ <- moveTo topicX topicY aliceA noteA (clock [(alice, 1)]) "for Y"
+                deleted <- deleteTopicFor aliceA topicX (clock [(alice, 0)])
+                (,,) refused deleted <$> notesList topicY)
+            `shouldBe` ( TopicRefused HasNotes
+                       , TopicDeleted
+                       , [ noteIn topicY noteA [(alice, 1)] "for Y" ] )
 
     it "returns the stored topic on a stale topic delete" $
         let stored = Topic topicX (clock [(alice, 0), (bob, 1)]) (TopicName "bob's") Nothing pureNow
         in run (do _ <- storeTopicFor aliceA aliceD topicX Nothing (TopicName "X") Nothing
-                   _ <- storeTopicFor aliceA aliceD topicY Nothing (TopicName "Y") Nothing
                    addTopicForUser bobU topicX
                    _ <- storeTopicFor bobA bobD topicX (Just (clock [(alice, 0), (bob, 1)])) (TopicName "bob's") Nothing
-                   deleteTopicFor aliceA aliceD topicX (clock [(alice, 0)]) topicY)
+                   deleteTopicFor aliceA topicX (clock [(alice, 0)]))
             `shouldBe` TopicConflicted stored
 
     it "refuses to delete a shared topic with notes in it" $
         run (do _ <- storeTopicFor aliceA aliceD topicX Nothing (TopicName "X") Nothing
-                _ <- storeTopicFor aliceA aliceD topicY Nothing (TopicName "Y") Nothing
                 addTopicForUser bobU topicX
                 _ <- putIn topicX bobA bobD noteA Nothing "b"
-                deleteTopicFor aliceA aliceD topicX (clock [(alice, 0)]) topicY)
+                deleteTopicFor aliceA topicX (clock [(alice, 0)]))
             `shouldBe` TopicRefused SharedWithNotes
 
     it "refuses to delete a topic the user doesn't have" $
         run (do _ <- storeTopicFor aliceA aliceD topicX Nothing (TopicName "X") Nothing
-                _ <- storeTopicFor bobA bobD topicY Nothing (TopicName "Y") Nothing
-                r <- deleteTopicFor bobA bobD topicX (clock [(alice, 0)]) topicY
+                r <- deleteTopicFor bobA topicX (clock [(alice, 0)])
                 (,) r <$> topicsList aliceA)
             `shouldBe` (TopicForbidden, [topicX])
-
-    it "refuses to move notes into a topic the user doesn't have" $
-        run (do _ <- storeTopicFor aliceA aliceD topicX Nothing (TopicName "X") Nothing
-                _ <- storeTopicFor bobA bobD topicY Nothing (TopicName "Y") Nothing
-                _ <- putIn topicX aliceA aliceD noteA Nothing "a"
-                r <- deleteTopicFor aliceA aliceD topicX (clock [(alice, 0)]) topicY
-                (,) r <$> notesList topicY)
-            `shouldBe` (TopicRefused NoSuchDestination, [])
-
-    it "reports a missing destination topic" $
-        run (do _ <- storeTopicFor aliceA aliceD topicX Nothing (TopicName "X") Nothing
-                deleteTopicFor aliceA aliceD topicX (clock [(alice, 0)]) topicY)
-            `shouldBe` TopicRefused NoSuchDestination
 
     it "registers a user, storing a hash their password verifies against" $
         let r = run (do c <- register (Username "alice") (Password "hunter22")
@@ -363,7 +382,7 @@ notesAppSpec = describe "NotesApp" $ do
                     own <- topicsList aliceA'
                     _ <- storeTopicFor aliceA' aliceD topicX Nothing (TopicName "X") Nothing
                     b <- register (Username "bob") (Password "hunter22") >>= withTopics
-                    _ <- traverse (\t -> deleteTopicFor aliceA' aliceD t (clock []) topicX) own
+                    _ <- traverse (\t -> deleteTopicFor aliceA' t (clock [])) own
                     c <- register (Username "carol") (Password "hunter22") >>= withTopics
                     pure [b, c]
                 _ -> pure [])
@@ -462,9 +481,87 @@ noteStoreSpec name run' = describe name $ do
                  addTopicForUser bobU topicX
                  addTopicForUser bobU topicY
                  _ <- storeNote aliceA (noteIn topicX noteA [(alice, 2)] "a")
-                 _ <- storeNote bobA (noteIn topicY noteA [(alice, 2), (bob, 1)] "moved")
+                 _ <- moveNote bobA topicX (noteIn topicY noteA [(alice, 2), (bob, 1)] "moved")
                  storeNote aliceA (noteIn topicX noteA [(alice, 1)] "stale"))
             `shouldReturn` Forbidden
+
+    it "refuses a write that would change a note's topic, even with a dominating clock" $
+        run' (do shareAll
+                 _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
+                 w <- storeNote aliceA (noteIn topicY noteA [(alice, 2)] "moved")
+                 (,) w <$> loadNote noteA)
+            `shouldReturn` (Conflicted (), Just (noteIn topicX noteA [(alice, 1)] "a"))
+
+    it "moves a note, replacing its contents, clock and timestamp in the one write" $
+        run' (do shareAll
+                 _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "for X")
+                 w <- moveNote aliceA topicX (movedIn topicY noteA [(alice, 2)] "for Y")
+                 (,,,) w <$> loadNote noteA <*> notesForTopic topicX <*> notesForTopic topicY)
+            `shouldReturn`
+                ( NoteMoved
+                , Just (movedIn topicY noteA [(alice, 2)] "for Y")
+                , V.empty
+                , V.fromList [ movedIn topicY noteA [(alice, 2)] "for Y" ]
+                )
+
+    it "accepts a move with an identical clock" $
+        run' (do shareAll
+                 _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
+                 moveNote aliceA topicX (noteIn topicY noteA [(alice, 1)] "for Y"))
+            `shouldReturn` NoteMoved
+
+    it "rejects a move with a lower counter than the stored clock" $
+        let stored = noteIn topicX noteA [(alice, 2)] "a"
+        in run' (do shareAll
+                    _ <- storeNote aliceA stored
+                    w <- moveNote aliceA topicX (noteIn topicY noteA [(alice, 1)] "for Y")
+                    (,) w <$> loadNote noteA)
+            `shouldReturn` (MoveConflicted (), Just stored)
+
+    it "rejects a move missing a key from the stored clock" $
+        let stored = noteIn topicX noteA [(alice, 1), (bob, 1)] "a"
+        in run' (do shareAll
+                    _ <- storeNote aliceA stored
+                    w <- moveNote aliceA topicX (noteIn topicY noteA [(alice, 5)] "for Y")
+                    (,) w <$> loadNote noteA)
+            `shouldReturn` (MoveConflicted (), Just stored)
+
+    it "rejects a move from a topic the note isn't in, even with a dominating clock" $
+        let stored = noteIn topicX noteA [(alice, 1)] "a"
+        in run' (do shareAll
+                    _ <- storeNote aliceA stored
+                    w <- moveNote aliceA defTopicId (noteIn topicY noteA [(alice, 2)] "for Y")
+                    (,) w <$> loadNote noteA)
+            `shouldReturn` (MoveConflicted (), Just stored)
+
+    it "reports moving a note that doesn't exist, without creating it" $
+        run' (do shareAll
+                 w <- moveNote aliceA topicX (noteIn topicY noteA [(alice, 1)] "for Y")
+                 (,) w <$> loadNote noteA)
+            `shouldReturn` (NoteGone, Nothing)
+
+    it "doesn't bring back a note deleted before the move" $
+        run' (do shareAll
+                 _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
+                 _ <- deleteNote bobA noteA (clock [(alice, 1)])
+                 w <- moveNote aliceA topicX (noteIn topicY noteA [(alice, 2)] "for Y")
+                 (,) w <$> loadNote noteA)
+            `shouldReturn` (NoteGone, Nothing)
+
+    it "refuses to move a note into a topic the mover doesn't have" $
+        run' (do addTopicForUser aliceU topicX
+                 _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
+                 w <- moveNote aliceA topicX (noteIn topicY noteA [(alice, 2)] "for Y")
+                 (,) w <$> loadNote noteA)
+            `shouldReturn` (MoveForbidden, Just (noteIn topicX noteA [(alice, 1)] "a"))
+
+    it "refuses to move a note out of a topic the mover doesn't have" $
+        run' (do addTopicForUser aliceU topicX
+                 addTopicForUser bobU topicY
+                 _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
+                 w <- moveNote bobA topicX (noteIn topicY noteA [(alice, 1), (bob, 1)] "taken")
+                 (,) w <$> loadNote noteA)
+            `shouldReturn` (MoveForbidden, Just (noteIn topicX noteA [(alice, 1)] "a"))
 
     it "adds a topic for a user without any notes in it, idempotently" $
         run' (do addTopicForUser aliceU topicY
@@ -477,7 +574,7 @@ noteStoreSpec name run' = describe name $ do
         run' (do shareAll
                  _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
                  _ <- storeNote bobA (noteIn topicX noteB [(bob, 1)] "b")
-                 _ <- storeNote aliceA (noteIn topicY noteA [(alice, 2)] "a moved")
+                 _ <- moveNote aliceA topicX (noteIn topicY noteA [(alice, 2)] "a moved")
                  (,) <$> notesForTopic topicX <*> notesForTopic topicY)
             `shouldReturn`
                 ( V.fromList [ noteIn topicX noteB [(bob, 1)] "b" ]
@@ -555,22 +652,28 @@ noteStoreSpec name run' = describe name $ do
                  loadTopicsForUser aliceA)
             `shouldReturn` V.fromList [ topic topicX [(alice, 1)] "X" ]
 
-    it "deletes a topic, moving its notes and ticking their clocks for the device" $
+    it "deletes a topic with no notes, leaving other topics' notes alone" $
         run' (do _ <- storeTopic aliceA (topic topicX [(alice, 1)] "X")
                  _ <- storeTopic aliceA (topic topicY [(alice, 1)] "Y")
-                 _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
-                 _ <- storeNote aliceA (noteIn topicX noteB [(bob, 2)] "b")
-                 _ <- storeNote aliceA (noteIn topicY noteC [(alice, 1)] "c")
-                 w <- deleteTopic aliceA aliceD later topicX (clock [(alice, 1)]) topicY
-                 (,,,) w <$> loadTopic topicX <*> notesForTopic topicX <*> notesForTopic topicY)
+                 _ <- storeNote aliceA (noteIn topicY noteA [(alice, 1)] "a")
+                 w <- deleteTopic aliceA topicX (clock [(alice, 1)])
+                 (,,) w <$> loadTopic topicX <*> notesForTopic topicY)
             `shouldReturn`
                 ( TopicDeleted
                 , Nothing
-                , V.empty
-                , V.fromList [ movedIn topicY noteA [(alice, 2)] "a"
-                             , movedIn topicY noteB [(alice, 1), (bob, 2)] "b"
-                             , noteIn topicY noteC [(alice, 1)] "c"
-                             ]
+                , V.fromList [ noteIn topicY noteA [(alice, 1)] "a" ]
+                )
+
+    it "refuses to delete a topic with notes, leaving the topic and its notes alone" $
+        run' (do _ <- storeTopic aliceA (topic topicX [(alice, 1)] "X")
+                 _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
+                 w <- deleteTopic aliceA topicX (clock [(alice, 1)])
+                 (,,,) w <$> loadTopic topicX <*> notesForTopic topicX <*> topicsForUser aliceA)
+            `shouldReturn`
+                ( TopicRefused HasNotes
+                , Just (topic topicX [(alice, 1)] "X")
+                , V.fromList [ noteIn topicX noteA [(alice, 1)] "a" ]
+                , V.fromList [topicX]
                 )
 
     it "revokes a deleted topic from every user" $
@@ -578,30 +681,28 @@ noteStoreSpec name run' = describe name $ do
                  _ <- storeTopic aliceA (topic topicY [(alice, 1)] "Y")
                  _ <- storeTopic bobA (topic topicZ [(bob, 1)] "Z")
                  addTopicForUser bobU topicX
-                 _ <- deleteTopic bobA bobD later topicX (clock [(alice, 1)]) topicZ
+                 _ <- deleteTopic bobA topicX (clock [(alice, 1)])
                  (,) <$> topicsForUser aliceA <*> topicsForUser bobA)
             `shouldReturn` (V.fromList [topicY], V.fromList [topicZ])
 
-    it "rejects a stale topic delete, leaving the topic and its notes alone" $
+    it "rejects a stale topic delete, leaving the topic alone" $
         let stored = topic topicX [(alice, 2)] "X"
         in run' (do _ <- storeTopic aliceA stored
-                    _ <- storeTopic aliceA (topic topicY [(alice, 1)] "Y")
-                    _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
-                    w <- deleteTopic aliceA aliceD later topicX (clock [(alice, 1)]) topicY
-                    (,,,) w <$> loadTopic topicX <*> notesForTopic topicX <*> topicsForUser aliceA)
-            `shouldReturn`
-                ( TopicConflicted ()
-                , Just stored
-                , V.fromList [ noteIn topicX noteA [(alice, 1)] "a" ]
-                , V.fromList [topicX, topicY]
-                )
+                    w <- deleteTopic aliceA topicX (clock [(alice, 1)])
+                    (,,) w <$> loadTopic topicX <*> topicsForUser aliceA)
+            `shouldReturn` (TopicConflicted (), Just stored, V.fromList [topicX])
+
+    it "reports a stale clock before notes, so none get moved out of a topic that's staying" $
+        run' (do _ <- storeTopic aliceA (topic topicX [(alice, 2)] "X")
+                 _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
+                 deleteTopic aliceA topicX (clock [(alice, 1)]))
+            `shouldReturn` TopicConflicted ()
 
     it "refuses to delete a topic that still has notes and more than one user" $
         run' (do _ <- storeTopic aliceA (topic topicX [(alice, 1)] "X")
-                 _ <- storeTopic aliceA (topic topicY [(alice, 1)] "Y")
                  addTopicForUser bobU topicX
                  _ <- storeNote bobA (noteIn topicX noteA [(bob, 1)] "b")
-                 w <- deleteTopic aliceA aliceD later topicX (clock [(alice, 1)]) topicY
+                 w <- deleteTopic aliceA topicX (clock [(alice, 1)])
                  (,,,) w <$> loadTopic topicX <*> notesForTopic topicX <*> topicsForUser bobA)
             `shouldReturn`
                 ( TopicRefused SharedWithNotes
@@ -612,51 +713,35 @@ noteStoreSpec name run' = describe name $ do
 
     it "refuses a shared topic with notes even when the clock is stale" $
         run' (do _ <- storeTopic aliceA (topic topicX [(alice, 2)] "X")
-                 _ <- storeTopic aliceA (topic topicY [(alice, 1)] "Y")
                  addTopicForUser bobU topicX
                  _ <- storeNote bobA (noteIn topicX noteA [(bob, 1)] "b")
-                 deleteTopic aliceA aliceD later topicX (clock [(alice, 1)]) topicY)
+                 deleteTopic aliceA topicX (clock [(alice, 1)]))
             `shouldReturn` TopicRefused SharedWithNotes
 
-    it "refuses to move notes to a topic that doesn't exist" $
+    it "deletes a shared topic with no notes" $
         run' (do _ <- storeTopic aliceA (topic topicX [(alice, 1)] "X")
-                 _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
-                 w <- deleteTopic aliceA aliceD later topicX (clock [(alice, 1)]) topicY
-                 (,,) w <$> loadTopic topicX <*> notesForTopic topicX)
-            `shouldReturn`
-                ( TopicRefused NoSuchDestination
-                , Just (topic topicX [(alice, 1)] "X")
-                , V.fromList [ noteIn topicX noteA [(alice, 1)] "a" ]
-                )
-
-    it "refuses to move notes into the topic being deleted" $
-        run' (do _ <- storeTopic aliceA (topic topicX [(alice, 1)] "X")
-                 w <- deleteTopic aliceA aliceD later topicX (clock [(alice, 1)]) topicX
-                 (,) w <$> loadTopic topicX)
-            `shouldReturn` (TopicRefused NoSuchDestination, Just (topic topicX [(alice, 1)] "X"))
+                 addTopicForUser bobU topicX
+                 w <- deleteTopic aliceA topicX (clock [(alice, 1)])
+                 (,) w <$> topicsForUser bobA)
+            `shouldReturn` (TopicDeleted, V.empty)
 
     it "refuses to delete a topic the user doesn't have" $
         run' (do _ <- storeTopic aliceA (topic topicX [(alice, 1)] "X")
-                 _ <- storeTopic bobA (topic topicY [(bob, 1)] "Y")
-                 w <- deleteTopic bobA bobD later topicX (clock [(alice, 1), (bob, 1)]) topicY
+                 w <- deleteTopic bobA topicX (clock [(alice, 1), (bob, 1)])
                  (,) w <$> loadTopic topicX)
             `shouldReturn` (TopicForbidden, Just (topic topicX [(alice, 1)] "X"))
 
-    it "refuses to move notes to a topic the user doesn't have" $
-        run' (do _ <- storeTopic aliceA (topic topicX [(alice, 1)] "X")
-                 _ <- storeTopic bobA (topic topicY [(bob, 1)] "Y")
-                 _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
-                 w <- deleteTopic aliceA aliceD later topicX (clock [(alice, 1)]) topicY
-                 (,) w <$> notesForTopic topicY)
-            `shouldReturn` (TopicRefused NoSuchDestination, V.empty)
+    it "revokes a topic that was never stored" $
+        run' (do addTopicForUser aliceU topicX
+                 w <- deleteTopic aliceA topicX (clock [])
+                 (,) w <$> topicsForUser aliceA)
+            `shouldReturn` (TopicDeleted, V.empty)
 
-    it "moves the notes of a topic that was never stored" $
-        run' (do _ <- storeTopic aliceA (topic topicY [(alice, 1)] "Y")
-                 addTopicForUser aliceU topicX
+    it "refuses to delete a topic that was never stored while it has notes" $
+        run' (do addTopicForUser aliceU topicX
                  _ <- storeNote aliceA (noteIn topicX noteA [(alice, 1)] "a")
-                 w <- deleteTopic aliceA aliceD later topicX (clock []) topicY
-                 (,) w <$> notesForTopic topicY)
-            `shouldReturn` (TopicDeleted, V.fromList [ movedIn topicY noteA [(alice, 2)] "a" ])
+                 deleteTopic aliceA topicX (clock []))
+            `shouldReturn` TopicRefused HasNotes
 
     it "deletes a note whose clock is dominated, dropping it from its topic" $
         run' (do shareAll
@@ -793,6 +878,10 @@ putIn :: TopicId -> Authed UserId -> DeviceId -> NoteId -> Maybe VectorClock -> 
 putIn tid uid did nid mVc content =
     store uid did nid mVc defTitle (Content content) defColorIndex defShowFull tid
 
+moveTo :: TopicId -> TopicId -> Authed UserId -> NoteId -> VectorClock -> Text -> StorePure (NoteMove Note)
+moveTo from to uid nid vc content =
+    move uid nid vc defTitle (Content content) defColorIndex defShowFull from to
+
 note :: NoteId -> [(UserDevice, Int)] -> Text -> Note
 note = noteIn defTopicId
 
@@ -800,7 +889,7 @@ noteIn :: TopicId -> NoteId -> [(UserDevice, Int)] -> Text -> Note
 noteIn tid nid entries content =
     Note nid (clock entries) defTitle (Content content) defColorIndex defShowFull tid pureNow
 
--- | A note as moved by a topic delete at 'later'.
+-- | A note as moved at 'later'.
 movedIn :: TopicId -> NoteId -> [(UserDevice, Int)] -> Text -> Note
 movedIn tid nid entries content =
     Note nid (clock entries) defTitle (Content content) defColorIndex defShowFull tid later

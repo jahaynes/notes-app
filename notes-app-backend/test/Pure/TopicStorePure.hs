@@ -10,7 +10,6 @@ import Types
 import           Control.Monad.Trans.State.Strict (State, get, gets, modify', put)
 import qualified Data.Map.Strict as M
 import qualified Data.Set        as S
-import           Data.Time                        (UTCTime)
 import           Data.Vector                      (Vector)
 import qualified Data.Vector     as V
 
@@ -61,9 +60,8 @@ instance TopicStore TopicStorePure where
                 put (Store ns (M.insert tid topic ts) (grant uid tid uts) us g)
                 pure Clean
 
-    deleteTopic :: Authed UserId -> DeviceId -> UTCTime -> TopicId -> VectorClock -> TopicId
-                -> TopicStorePure (TopicDeletion ())
-    deleteTopic aUid did updatedAt tid incoming dest = TopicStorePure $ do
+    deleteTopic :: Authed UserId -> TopicId -> VectorClock -> TopicStorePure (TopicDeletion ())
+    deleteTopic aUid tid incoming = TopicStorePure $ do
 
         Store ns ts uts us g <- get
 
@@ -74,16 +72,15 @@ instance TopicStore TopicStorePure where
 
             _ | not (has uid tid uts) -> pure TopicForbidden
 
-            _ | dest == tid || M.notMember dest ts || not (has uid dest uts) ->
-                pure (TopicRefused NoSuchDestination)
-
             _ | hasNotes && userCount > 1 -> pure (TopicRefused SharedWithNotes)
 
             Just (Topic _ stored _ _ _)
                 | not (incoming `isNewerThan` stored) -> pure (TopicConflicted ())
 
+            _ | hasNotes -> pure (TopicRefused HasNotes)
+
             _ -> do
-                put $ Store (M.map move ns)
+                put $ Store ns
                             (M.delete tid ts)
                             (M.map (S.delete tid) uts)
                             us
@@ -92,8 +89,3 @@ instance TopicStore TopicStorePure where
 
         where
         uid = getAuthed aUid
-        ud  = UserDevice uid did
-
-        move n@(Note nid vc t c ci sf ntid _)
-            | ntid == tid = Note nid (tick ud vc) t c ci sf dest updatedAt
-            | otherwise   = n

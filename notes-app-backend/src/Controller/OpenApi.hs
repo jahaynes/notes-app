@@ -36,13 +36,14 @@ notesOpenApi =
         & info . OpenApi.title .~ "Notes API"
         & info . version     .~ "0.1.0.0"
         & info . OpenApi.description ?~ "PUT returns 204 on a clean write, \
-                                \or 409 with the stored note on a vector clock conflict. \
+                                \or 409 with the stored note on a vector clock conflict, or if it would change the note's topic. \
+                                \POST /note/{noteId}/move is the only way to do that, replacing the note's contents in the \
+                                \same write: 204 once moved, 404 if the note is gone (it isn't recreated), or 409 with the \
+                                \stored note on a vector clock conflict or if the note isn't in fromTopicId. \
                                 \DELETE likewise returns 204 once the note is gone \
                                 \(including if it never existed), or 409 with the stored note. \
-                                \Deleting a topic moves its notes to moveNotesTo, or returns 422 with \
-                                \NoSuchDestination if that topic doesn't exist, isn't one of the user's, \
-                                \or is the one being deleted, \
-                                \or SharedWithNotes if the topic still has notes and more than one user. \
+                                \Deleting a topic returns 422 if it still has notes: SharedWithNotes if it has more than one user, \
+                                \otherwise HasNotes, as the client must move them out first. \
                                 \POST /user creates a user along with a topic of theirs named Uncategorised, \
                                 \returning 201 with the new user, 409 if the username is taken, or 422 with \
                                 \BlankUsername or EmptyPassword. \

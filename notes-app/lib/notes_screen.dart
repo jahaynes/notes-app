@@ -209,6 +209,17 @@ class _NotesScreenState extends State<NotesScreen> {
           ),
         ),
       );
+    } catch (e) {
+      debugPrint('Could not delete topics: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Couldn\'t finish deleting. Any notes already moved stay moved, '
+            'so try again.',
+          ),
+        ),
+      );
     }
   }
 

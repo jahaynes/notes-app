@@ -156,76 +156,54 @@ instance TopicStore TopicStoreSQLite where
                     )
             ); |]
 
-    deleteTopic :: Authed UserId -> DeviceId -> UTCTime -> TopicId -> VectorClock -> TopicId
-                -> TopicStoreSQLite (TopicDeletion ())
-    deleteTopic uid did updatedAt tid clock dest = TopicStoreSQLite $ do
+    deleteTopic :: Authed UserId -> TopicId -> VectorClock -> TopicStoreSQLite (TopicDeletion ())
+    deleteTopic uid tid clock = TopicStoreSQLite $ do
         tconn <- ask
         let conn = txn tconn
         liftIO $ do
 
-            hasTid     <- userHasTopic tconn uid tid
-            hasDest    <- userHasTopic tconn uid dest
-            destExists <- not . null <$> (query conn sqlTopicExists (Only (SQLTopicId dest)) :: IO [Only Int])
-            [Only sharedWithNotes] <- query conn sqlSharedWithNotes (SQLTopicId tid, SQLTopicId tid)
+            hasTid <- userHasTopic tconn uid tid
+            [Only hasNotes] <- query conn sqlHasNotes (Only (SQLTopicId tid))
+            [Only shared]   <- query conn sqlShared (Only (SQLTopicId tid))
+            [Only stale]    <- query conn sqlStale (SQLTopicId tid, SQLClock clock)
 
-            if | not hasTid                                   -> pure TopicForbidden
-               | dest == tid || not destExists || not hasDest -> pure (TopicRefused NoSuchDestination)
-               | sharedWithNotes                              -> pure (TopicRefused SharedWithNotes)
+            -- A stale clock comes before HasNotes, so that a client finds out
+            -- before it moves any notes out of a topic that's staying.
+            if | not hasTid         -> pure TopicForbidden
+               | hasNotes && shared -> pure (TopicRefused SharedWithNotes)
+               | stale              -> pure (TopicConflicted ())
+               | hasNotes           -> pure (TopicRefused HasNotes)
                | otherwise -> do
-                    execute conn sqlDeleteTopic (SQLTopicId tid, SQLClock clock)
-                    changes conn >>= \case
-                        0 -> query conn sqlTopicExists (Only (SQLTopicId tid)) >>= \case
-                                 []                -> moveNotes tconn
-                                 (_ :: [Only Int]) -> pure (TopicConflicted ())
-                        _ -> moveNotes tconn
+                    execute conn sqlDeleteTopic (Only (SQLTopicId tid))
+                    execute conn sqlRevokeTopic (Only (SQLTopicId tid))
+                    pure TopicDeleted
 
         where
-        moveNotes tconn = do
-            let conn = txn tconn
-            moved <- query conn sqlNoteClocksInTopic (Only (SQLTopicId tid))
-            mapM_ (\(nid :: SQLNoteId, SQLClock vc) ->
-                       execute conn sqlMoveNote (SQLTopicId dest, SQLClock (tick (UserDevice (getAuthed uid) did) vc), updatedAt, nid))
-                  moved
-            execute conn sqlRevokeTopic (Only (SQLTopicId tid))
-            pure TopicDeleted
+        sqlHasNotes :: Query
+        sqlHasNotes = [iii|
+            SELECT EXISTS (SELECT 1 FROM Note WHERE topic_id = ?); |]
 
-        sqlTopicExists :: Query
-        sqlTopicExists = [iii|
-            SELECT 1
-            FROM Topic
-            WHERE id = ?; |]
+        sqlShared :: Query
+        sqlShared = [iii|
+            SELECT (SELECT COUNT(*) FROM UserTopic WHERE topic_id = ?) > 1; |]
 
-        sqlSharedWithNotes :: Query
-        sqlSharedWithNotes = [iii|
-            SELECT (SELECT COUNT(*) FROM UserTopic WHERE topic_id = ?) > 1
-               AND EXISTS (SELECT 1 FROM Note WHERE topic_id = ?); |]
+        sqlStale :: Query
+        sqlStale = [iii|
+            SELECT EXISTS (
+                SELECT 1
+                FROM Topic, json_each(Topic.clock) AS stored
+                WHERE Topic.id = ?
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM json_each(?) AS incoming
+                    WHERE incoming.key = stored.key
+                    AND incoming.value >= stored.value
+                )
+            ); |]
 
         sqlDeleteTopic :: Query
         sqlDeleteTopic = [iii|
             DELETE FROM Topic
-            WHERE id = ?
-            AND NOT EXISTS (
-                SELECT 1
-                FROM json_each(Topic.clock) AS stored
-                WHERE
-                    NOT EXISTS (
-                        SELECT 1
-                        FROM json_each(?) AS incoming
-                        WHERE incoming.key = stored.key
-                        AND incoming.value >= stored.value
-                    )
-            ); |]
-
-        sqlNoteClocksInTopic :: Query
-        sqlNoteClocksInTopic = [iii|
-            SELECT id, clock
-            FROM Note
-            WHERE topic_id = ?; |]
-
-        sqlMoveNote :: Query
-        sqlMoveNote = [iii|
-            UPDATE Note
-            SET topic_id = ?, clock = ?, updated_at = ?
             WHERE id = ?; |]
 
         sqlRevokeTopic :: Query

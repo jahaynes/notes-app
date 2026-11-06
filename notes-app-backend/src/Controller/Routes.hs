@@ -32,7 +32,7 @@ type TopicAPI =
     :<|> "topic" :> Capture "topicId" TopicId :> "notes" :> NotesForTopic
 
 type NoteAPI =
-    "note" :> Capture "noteId" NoteId :> (LoadNote :<|> StoreNote :<|> DeleteNote)
+    "note" :> Capture "noteId" NoteId :> (LoadNote :<|> StoreNote :<|> DeleteNote :<|> "move" :> MoveNote)
 
 type CreateUser =
     ReqBody '[JSON] CreateUserRequest
@@ -65,6 +65,14 @@ type StoreNote =
                                , WithStatus 403 NoBody
                                , WithStatus 409 NoteView
                                ]
+
+type MoveNote =
+    JwtAuth :> ReqBody '[JSON] MoveRequest
+        :> UVerb 'POST '[JSON] '[ WithStatus 204 NoBody
+                                , WithStatus 403 NoBody
+                                , WithStatus 404 NoBody
+                                , WithStatus 409 NoteView
+                                ]
 
 type StoreTopic =
     JwtAuth :> ReqBody '[JSON] StoreTopicRequest

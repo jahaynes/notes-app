@@ -59,7 +59,9 @@ final class AddTopic extends NoteAction {
 
 /// Removes the topics with [ids], moving their notes to
 /// [NoteStore.defaultTopic], which can't itself be deleted. Dispatching it
-/// throws [SharedTopicsNotDeleted] if some of them can't be removed.
+/// throws [SharedTopicsNotDeleted] if some of them can't be removed. If it
+/// throws anything else, the topic is back but some of its notes may have
+/// been moved, and dispatching it again carries on from there.
 final class DeleteTopics extends NoteAction {
   const DeleteTopics(this.ids);
 

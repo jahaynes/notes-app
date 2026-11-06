@@ -110,12 +110,12 @@ storeServer = userServer :<|> topicServer :<|> noteServer
         :<|> notesForTopicHandler
 
         where
-        deleteTopicHandler :: (TopicStore m, Log m, Clock m) => TopicId -> ServerT DeleteTopic m
-        deleteTopicHandler tid authUid (DeleteTopicRequest uid did vc dest)
+        deleteTopicHandler :: (TopicStore m, Log m) => TopicId -> ServerT DeleteTopic m
+        deleteTopicHandler tid authUid (DeleteTopicRequest uid vc)
             | uid /= getAuthed authUid =
                 respond (WithStatus @403 NoBody)
             | otherwise =
-                deleteTopicFor authUid did tid vc dest >>= \case
+                deleteTopicFor authUid tid vc >>= \case
                     TopicDeleted          -> respond (WithStatus @204 NoBody)
                     TopicConflicted topic -> respond (WithStatus @409 (toTopicView topic))
                     TopicRefused refusal  -> respond (WithStatus @422 refusal)
@@ -138,7 +138,7 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                 Denied        -> respond (WithStatus @403 NoBody)
 
     noteServer :: (NoteStore m, TopicStore m, Log m, Clock m) => ServerT NoteAPI m
-    noteServer = \nid -> loadHandler nid :<|> storeHandler nid :<|> deleteHandler nid
+    noteServer = \nid -> loadHandler nid :<|> storeHandler nid :<|> deleteHandler nid :<|> moveHandler nid
 
         where
         loadHandler :: (NoteStore m, TopicStore m) => NoteId -> ServerT LoadNote m
@@ -157,6 +157,17 @@ storeServer = userServer :<|> topicServer :<|> noteServer
                     Clean           -> respond (WithStatus @204 NoBody)
                     Conflicted note -> respond (WithStatus @409 (toView note))
                     Forbidden       -> respond (WithStatus @403 NoBody)
+
+        moveHandler :: (NoteStore m, Log m, Clock m) => NoteId -> ServerT MoveNote m
+        moveHandler nid authUid (MoveRequest uid vc t c ci sf from to)
+            | uid /= getAuthed authUid =
+                respond (WithStatus @403 NoBody)
+            | otherwise =
+                move authUid nid vc t c ci sf from to >>= \case
+                    NoteMoved           -> respond (WithStatus @204 NoBody)
+                    MoveConflicted note -> respond (WithStatus @409 (toView note))
+                    MoveForbidden       -> respond (WithStatus @403 NoBody)
+                    NoteGone            -> respond (WithStatus @404 NoBody)
 
         deleteHandler :: (NoteStore m, Log m) => NoteId -> ServerT DeleteNote m
         deleteHandler nid authUid (DeleteRequest vc) =

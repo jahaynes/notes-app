@@ -7,6 +7,7 @@ module Types ( Access (..)
              , Newer (..)
              , Note (..)
              , NoteId (..)
+             , NoteMove (..)
              , Password (..)
              , PasswordHash (..)
              , Salt (..)
@@ -25,7 +26,6 @@ module Types ( Access (..)
              , Username (..)
              , VectorClock (..)
              , Written (..)
-             , tick
              ) where
 
 import           Control.Lens         ((&), (?~))
@@ -111,10 +111,6 @@ instance Newer VectorClock where
     VectorClock incoming `isNewerThan` VectorClock stored =
         M.isSubmapOfBy (<=) stored incoming
 
--- | Advances one device's entry, as a write made on that device would.
-tick :: UserDevice -> VectorClock -> VectorClock
-tick ud (VectorClock m) = VectorClock (M.insertWith (+) ud 1 m)
-
 newtype Content
     = Content Text
         deriving (Eq, Show, ToJSON, FromJSON, ToSchema)
@@ -158,7 +154,18 @@ data Access a
     | Denied
         deriving (Eq, Show, Functor)
 
--- | The outcome of deleting a topic, moving its notes elsewhere.
+data NoteMove a
+    = NoteMoved
+    | MoveConflicted !a
+      -- ^ The note has changed since the mover saw it, or isn't in the topic
+      -- the mover thought it was.
+    | MoveForbidden
+      -- ^ The mover doesn't have the topic it's in, or would be in.
+    | NoteGone
+      -- ^ There's no such note, so there's nothing to move.
+        deriving (Eq, Show, Functor)
+
+-- | The outcome of deleting a topic.
 -- A conflict carries whatever the caller can show for it: nothing
 -- from the store itself, the stored topic once it has been loaded.
 data TopicDeletion a
@@ -171,11 +178,11 @@ data TopicDeletion a
 
 -- | Why a topic delete was refused outright, whatever its clock.
 data TopicRefusal
-    = NoSuchDestination
-      -- ^ The notes' destination doesn't exist, isn't one of the user's
-      -- topics, or is the topic itself.
-    | SharedWithNotes
+    = SharedWithNotes
       -- ^ The topic still has notes and more than one user has it.
+    | HasNotes
+      -- ^ The topic still has notes, which must be moved out first as only
+      -- a client can re-encrypt them for another topic.
         deriving (Eq, Show, Generic)
 
 instance ToJSON   TopicRefusal

@@ -61,6 +61,20 @@ instance ToJSON   StoreRequest
 instance FromJSON StoreRequest
 instance ToSchema StoreRequest
 
+data MoveRequest =
+    MoveRequest { userId      :: !UserId
+                , clock       :: !VectorClock
+                , title       :: !Title
+                , content     :: !Content
+                , colorIndex  :: !ColorIndex
+                , showFull    :: !Bool
+                , fromTopicId :: !TopicId
+                , toTopicId   :: !TopicId
+                } deriving (Eq, Show, Generic)
+
+instance FromJSON MoveRequest
+instance ToSchema MoveRequest
+
 newtype DeleteRequest =
     DeleteRequest { clock :: VectorClock
                   } deriving (Eq, Show, Generic)
@@ -92,10 +106,8 @@ instance FromJSON StoreTopicRequest
 instance ToSchema StoreTopicRequest
 
 data DeleteTopicRequest =
-    DeleteTopicRequest { userId      :: !UserId
-                       , deviceId    :: !DeviceId
-                       , clock       :: !VectorClock
-                       , moveNotesTo :: !TopicId
+    DeleteTopicRequest { userId :: !UserId
+                       , clock  :: !VectorClock
                        } deriving (Eq, Show, Generic)
 
 instance FromJSON DeleteTopicRequest

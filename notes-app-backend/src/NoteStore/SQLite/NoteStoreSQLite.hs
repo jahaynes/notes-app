@@ -40,6 +40,12 @@ noteWithinReach conn uid nid = do
                 FROM UserTopic
                 WHERE user_id = ?)); |]
 
+sqlNoteExists :: Query
+sqlNoteExists = [iii|
+    SELECT 1
+    FROM Note
+    WHERE id = ?; |]
+
 toNote :: (SQLNoteId, Text, SQLClock, Text, Int, Bool, SQLTopicId, UTCTime) -> Note
 toNote (SQLNoteId nid, value, SQLClock clock, title, colorIndex, showFull, SQLTopicId topicId, updatedAt) =
     Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
@@ -105,13 +111,58 @@ instance NoteStore NoteStoreSQLite where
                 show_full   = excluded.show_full,
                 topic_id    = excluded.topic_id,
                 updated_at  = excluded.updated_at
-            WHERE NOT EXISTS (
+            WHERE Note.topic_id = excluded.topic_id
+            AND NOT EXISTS (
                 SELECT 1
                 FROM json_each(Note.clock) AS stored
                 WHERE
                     NOT EXISTS (
                         SELECT 1
                         FROM json_each(excluded.clock) AS incoming
+                        WHERE incoming.key = stored.key
+                        AND incoming.value >= stored.value
+                    )
+            ); |]
+
+    moveNote :: Authed UserId -> TopicId -> Note -> NoteStoreSQLite (NoteMove ())
+    moveNote uid from (Note nid clock (Title title) (Content value) (ColorIndex colorIndex)
+                            showFull to updatedAt) = NoteStoreSQLite $ do
+        tconn <- ask
+        let conn = txn tconn
+        liftIO $ do
+            allowed <- (&&) <$> userHasTopic tconn uid to <*> noteWithinReach tconn (getAuthed uid) nid
+            if not allowed
+                then pure MoveForbidden
+                else do
+                    execute conn sqlMoveNote ( value, SQLClock clock, title, colorIndex, showFull
+                                             , SQLTopicId to, updatedAt, SQLNoteId nid, SQLTopicId from
+                                             , SQLClock clock )
+                    changes conn >>= \case
+                        0 -> query conn sqlNoteExists (Only (SQLNoteId nid)) >>= \case
+                                 []                -> pure NoteGone
+                                 (_ :: [Only Int]) -> pure (MoveConflicted ())
+                        _ -> pure NoteMoved
+
+        where
+        sqlMoveNote :: Query
+        sqlMoveNote = [iii|
+            UPDATE Note
+            SET value       = ?,
+                clock       = ?,
+                title       = ?,
+                color_index = ?,
+                show_full   = ?,
+                topic_id    = ?,
+                updated_at  = ?
+            WHERE id = ?
+            AND topic_id = ?
+            AND NOT EXISTS (
+                SELECT 1
+                FROM json_each(Note.clock) AS stored
+                WHERE
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM json_each(?) AS incoming
                         WHERE incoming.key = stored.key
                         AND incoming.value >= stored.value
                     )
@@ -149,8 +200,3 @@ instance NoteStore NoteStoreSQLite where
                     )
             ); |]
 
-        sqlNoteExists :: Query
-        sqlNoteExists = [iii|
-            SELECT 1
-            FROM Note
-            WHERE id = ?; |]

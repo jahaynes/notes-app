@@ -33,8 +33,10 @@ class NotesApiException implements Exception {
 /// in with the [Login] the store was opened with: their id goes in request
 /// bodies, and every request carries their token.
 ///
-/// Deleting a topic is sent straight away rather than held back, and the
-/// backend moves the topic's notes itself.
+/// Deleting a topic is sent straight away rather than held back. The backend
+/// only deletes a topic with no notes left, so this store moves them out itself,
+/// one at a time. Each move is atomic but the whole delete isn't: if it fails
+/// partway, the moved notes stay moved and the topic comes back with the rest.
 class HttpNoteStore extends NoteStore {
   HttpNoteStore._(
     this._client,
@@ -114,6 +116,10 @@ class HttpNoteStore extends NoteStore {
   /// How long a note must go unchanged before it's written, so that typing
   /// sends a request per pause rather than per keystroke.
   static const _writeDelay = Duration(milliseconds: 500);
+
+  /// How many times to try emptying a topic being deleted, as notes can keep
+  /// arriving in it from elsewhere.
+  static const _moveOutPasses = 3;
 
   final http.Client _client;
   final Uri _baseUri;
@@ -220,8 +226,8 @@ class HttpNoteStore extends NoteStore {
           for (final t in _topics.value)
             if (!idSet.contains(t.id)) t,
         ]);
-        // The backend moves the notes itself, so only writes already waiting
-        // need to follow them.
+        // Shown as moved straight away, with any writes already waiting
+        // following them. [_deleteTopic] then moves them on the backend.
         final moved = <String, Set<String>>{};
         _notes.value = _sorted([
           for (final n in _notes.value)
@@ -236,7 +242,7 @@ class HttpNoteStore extends NoteStore {
         ]);
         final shared = await Future.wait([
           for (final t in deleted)
-            _enqueue(() => _deleteTopic(t, moved[t.id] ?? const {})),
+            _deleteTopic(t, moved.putIfAbsent(t.id, () => {})),
         ]);
         final refused = [
           for (final (i, t) in deleted.indexed)
@@ -255,46 +261,83 @@ class HttpNoteStore extends NoteStore {
     return next;
   }
 
-  /// Deletes [topic] from the backend, which moves its notes to the default
-  /// topic as [dispatch] already has here for the notes [moved]. If the
-  /// backend keeps the topic, it comes back here with those notes, and this
-  /// returns whether that was because it's shared and still has notes.
+  /// Deletes [topic] from the backend, first moving its notes to the default
+  /// topic as [dispatch] already has here for the notes [moved]. Nothing is
+  /// moved until the backend says the topic is only held up by its notes, as
+  /// moving them out of a shared topic would take them from its other users.
+  ///
+  /// If the topic stays, it comes back here with the notes that didn't get
+  /// moved, and this returns whether that was because it's shared and still
+  /// has notes.
   Future<bool> _deleteTopic(Topic topic, Set<String> moved) async {
-    final path = 'topic/${topic.id}';
-    final http.Response response;
     try {
-      response = await _client.delete(
-        _baseUri.resolve(path),
-        headers: const {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'userId': user.id,
-          'deviceId': _deviceId,
-          'clock': _topicClocks[topic.id] ?? const <String, int>{},
-          'moveNotesTo': defaultTopic.id,
-        }),
-      );
+      var outcome = await _enqueue(() => _sendTopicDelete(topic, moved));
+      if (outcome == _TopicDelete.hasNotes) {
+        // Outside the queue, as this waits for requests joining the back of it.
+        await flush();
+        outcome = await _enqueue(() => _moveOutAndDelete(topic, moved));
+      }
+      return outcome == _TopicDelete.shared;
+    } catch (_) {
+      _restoreTopic(topic, moved);
+      rethrow;
     } finally {
       _deletingTopics.remove(topic.id);
     }
+  }
+
+  /// Moves every note the backend has in [topic] to the default topic, then
+  /// deletes [topic], going round again for any notes that turned up in the
+  /// meantime or whose moves conflicted.
+  ///
+  /// Only safe to call from a request run by [_enqueue].
+  Future<_TopicDelete> _moveOutAndDelete(Topic topic, Set<String> moved) async {
+    for (var pass = 0; pass < _moveOutPasses; pass++) {
+      final views = await _getNotes(_client, _baseUri, topic.id);
+      _merge((n) => n.topicId == topic.id, views);
+      for (final json in views) {
+        final note = byId(json['noteId'] as String);
+        // Waiting to be deleted.
+        if (note == null) continue;
+        // It may have been moved somewhere else here since, so it goes there.
+        final next = note.topicId == topic.id
+            ? _moveNote(note, defaultTopic.id, moved)
+            : note;
+        _replaceNote(next);
+        await _putNote(next);
+      }
+      final outcome = await _sendTopicDelete(topic, moved);
+      if (outcome != _TopicDelete.hasNotes) return outcome;
+    }
+    throw NotesApiException('DELETE topic/${topic.id}', 422, '"HasNotes"');
+  }
+
+  /// Asks the backend to delete [topic], which it does if it has no notes. If
+  /// it's kept for any reason but those notes, it comes back here.
+  Future<_TopicDelete> _sendTopicDelete(Topic topic, Set<String> moved) async {
+    final path = 'topic/${topic.id}';
+    final response = await _client.delete(
+      _baseUri.resolve(path),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'userId': user.id,
+        'clock': _topicClocks[topic.id] ?? const <String, int>{},
+      }),
+    );
     switch (response.statusCode) {
       case 204:
         _topicClocks.remove(topic.id);
-        // Follow the backend, which moved every note it had in the topic and
-        // ticked this device's entry in each one's clock.
-        for (final MapEntry(key: id, value: note) in _synced.entries.toList()) {
-          if (note.topicId != topic.id) continue;
-          _synced[id] = note.copyWith(topicId: defaultTopic.id);
-          _clocks[id] = _ticked(_clocks[id] ?? const {});
-        }
-        return false;
+        return _TopicDelete.deleted;
       case 409:
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         _topicClocks[topic.id] = _clockFrom(json);
         _restoreTopic(_topicFromView(json), moved);
-        return false;
+        return _TopicDelete.kept;
       case 422 when jsonDecode(response.body) == 'SharedWithNotes':
         _restoreTopic(topic, moved);
-        return true;
+        return _TopicDelete.shared;
+      case 422 when jsonDecode(response.body) == 'HasNotes':
+        return _TopicDelete.hasNotes;
       default:
         throw NotesApiException(
           'DELETE $path',
@@ -305,12 +348,15 @@ class HttpNoteStore extends NoteStore {
   }
 
   /// Puts back [topic] after the backend kept it, along with the notes
-  /// [moved] out of it that are still in the default topic.
+  /// [moved] out of it here that are still in the default topic. Those the
+  /// backend has moved too stay moved.
   void _restoreTopic(Topic topic, Set<String> moved) {
     _topics.value = List.unmodifiable([..._topics.value, topic]);
     _notes.value = _sorted([
       for (final n in _notes.value)
-        if (moved.contains(n.id) && n.topicId == defaultTopic.id)
+        if (moved.contains(n.id) &&
+            n.topicId == defaultTopic.id &&
+            _synced[n.id]?.topicId != defaultTopic.id)
           _moveNote(n, topic.id, {})
         else
           n,
@@ -478,29 +524,53 @@ class HttpNoteStore extends NoteStore {
   /// Whether the note [id] is waiting to be deleted.
   bool _deleting(String id) => _unsent[id]?.write is _Delete;
 
-  /// Writes [note] with this device's clock entry bumped. On a conflict the
-  /// backend keeps its copy and returns it, and that copy replaces ours.
+  /// Writes [note] with this device's clock entry bumped, moving it if the
+  /// backend last had it in another topic. On a conflict the backend keeps its
+  /// copy and returns it, and that copy replaces ours. A note that's gone from
+  /// the backend by the time it's moved isn't brought back.
   Future<void> _putNote(Note note) async {
     final clock = _ticked(_clocks[note.id] ?? const {});
-    final path = 'note/${note.id}';
-    final response = await _client.put(
-      _baseUri.resolve(path),
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'userId': user.id,
-        'deviceId': _deviceId,
-        'clock': clock,
-        'title': note.title,
-        'content': note.body,
-        'colorIndex': note.colorIndex,
-        'showFull': note.showFull,
-        'topicId': note.topicId,
-      }),
-    );
+    final from = _synced[note.id]?.topicId;
+    final moving = from != null && from != note.topicId;
+    final path = moving ? 'note/${note.id}/move' : 'note/${note.id}';
+    final fields = {
+      'userId': user.id,
+      'clock': clock,
+      'title': note.title,
+      'content': note.body,
+      'colorIndex': note.colorIndex,
+      'showFull': note.showFull,
+    };
+    const headers = {'Content-Type': 'application/json'};
+    final response = moving
+        ? await _client.post(
+            _baseUri.resolve(path),
+            headers: headers,
+            body: jsonEncode({
+              ...fields,
+              'fromTopicId': from,
+              'toTopicId': note.topicId,
+            }),
+          )
+        : await _client.put(
+            _baseUri.resolve(path),
+            headers: headers,
+            body: jsonEncode({
+              ...fields,
+              'deviceId': _deviceId,
+              'topicId': note.topicId,
+            }),
+          );
     switch (response.statusCode) {
       case 204:
         _clocks[note.id] = clock;
         _synced[note.id] = note;
+      case 404 when moving:
+        _clocks.remove(note.id);
+        _synced.remove(note.id);
+        _notes.value = List.unmodifiable(
+          _notes.value.where((n) => n.id != note.id),
+        );
       case 409:
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         _clocks[note.id] = _clockFrom(json);
@@ -510,7 +580,7 @@ class HttpNoteStore extends NoteStore {
         _replaceNote(stored);
       default:
         throw NotesApiException(
-          'PUT $path',
+          '${moving ? 'POST' : 'PUT'} $path',
           response.statusCode,
           response.body,
         );
@@ -708,4 +778,18 @@ class _Unsent {
 
   /// Completes once [write], or whichever write replaces it, is sent.
   final done = Completer<void>();
+}
+
+/// How asking the backend to delete a topic went.
+enum _TopicDelete {
+  deleted,
+
+  /// It still has notes, and they need moving out first.
+  hasNotes,
+
+  /// It's shared and still has notes, so it stays.
+  shared,
+
+  /// It's changed since this store last saw it, so it stays.
+  kept,
 }
