@@ -56,7 +56,7 @@ loadSigningKey =
     bytes = TE.encodeUtf8 . T.pack
 
 tokenLifetime :: NominalDiffTime
-tokenLifetime = 24 * 60 * 60
+tokenLifetime = 7 * 24 * 60 * 60
 
 audience :: StringOrURI
 audience = "notes-app"
