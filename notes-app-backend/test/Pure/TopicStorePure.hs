@@ -9,7 +9,6 @@ import Types
 
 import           Control.Monad.Trans.State.Strict (State, get, gets, modify', put)
 import qualified Data.Map.Strict as M
-import           Data.Maybe                       (mapMaybe)
 import qualified Data.Set        as S
 import           Data.Time                        (UTCTime)
 import           Data.Vector                      (Vector)
@@ -26,13 +25,13 @@ instance TopicStore TopicStorePure where
 
     topicsForUser :: Authed UserId -> TopicStorePure (Vector TopicId)
     topicsForUser uid = TopicStorePure $
-        gets (V.fromList . maybe [] S.toAscList . M.lookup (getAuthed uid) . userTopics)
+        gets (maybe V.empty (V.fromList . S.toAscList) . M.lookup (getAuthed uid) . userTopics)
 
     loadTopicsForUser :: Authed UserId -> TopicStorePure (Vector Topic)
-    loadTopicsForUser uid = TopicStorePure $ do
-        tids <- gets (maybe [] S.toAscList . M.lookup (getAuthed uid) . userTopics)
-        ts   <- gets topics
-        pure (V.fromList (mapMaybe (`M.lookup` ts) tids))
+    loadTopicsForUser uid = do
+        tids <- topicsForUser uid
+        ts   <- TopicStorePure (gets topics)
+        pure (V.mapMaybe (`M.lookup` ts) tids)
 
     addTopicForUser :: UserId -> TopicId -> TopicStorePure ()
     addTopicForUser uid tid = TopicStorePure $
