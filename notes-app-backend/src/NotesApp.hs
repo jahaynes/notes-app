@@ -15,11 +15,12 @@ import Auth.Token      (Authed, getAuthed)
 import NoteStore.Class
 import Types
 
-import           Data.Functor         ((<&>))
-import           Data.Maybe           (fromMaybe)
-import qualified Data.Text       as T
+import           Data.Functor            ((<&>))
 import qualified Data.Map.Strict as M
-import           Data.Vector          (Vector)
+import           Data.Maybe              (fromMaybe)
+import           Data.String.Interpolate (i)
+import qualified Data.Text       as T
+import           Data.Vector             (Vector)
 
 -- | The note, if there is one and it's in one of the user's topics.
 load :: (NoteStore m, TopicStore m)
@@ -172,13 +173,19 @@ register (Username name) password@(Password plain)
         let user  = User userId (Username trimmed) (hashPassword salt password) createdAt
             topic = Topic topicId (VectorClock M.empty) uncategorised Nothing createdAt
 
-        creation <- createUser user topic
+        createUser user topic >>= \case
 
-        case creation of
-            UserCreated () -> lPutStrLn "User created"
-            _              -> pure ()
+            UserCreated () -> do
+                lPutStrLn "User created"
+                pure (UserCreated user)
 
-        pure (user <$ creation)
+            UsernameTaken -> do
+                lPutStrLn "Username already taken"
+                pure UsernameTaken
+
+            UserRefused refusal -> do
+                lPutStrLn [i|Refused to create user: #{refusal}|]
+                pure (UserRefused refusal)
 
     where
     trimmed = T.strip name
