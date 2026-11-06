@@ -10,13 +10,14 @@ module NotesApp ( authenticate
                 , topicsFor
                 ) where
 
-import Auth.Password (hashPassword, verifyPassword)
-import Auth.Token    (Authed, getAuthed)
+import Auth.Password   (hashPassword, verifyPassword)
+import Auth.Token      (Authed, getAuthed)
+import NoteStore.Class
 import Types
 
+import           Data.Functor         ((<&>))
 import           Data.Maybe           (fromMaybe)
 import qualified Data.Text       as T
-import           NoteStore.Class
 import qualified Data.Map.Strict as M
 import           Data.Vector          (Vector)
 
@@ -28,9 +29,9 @@ load userId noteId =
     loadNote noteId >>= \case
 
         Just note@(Note _ _ _ _ _ _ topicId _) ->
-            hasTopic userId topicId >>= \case
-                True  -> pure (Granted (Just note))
-                False -> pure Denied
+            hasTopic userId topicId <&> \case
+                True  -> Granted (Just note)
+                False -> Denied
 
         Nothing ->
             pure (Granted Nothing)
